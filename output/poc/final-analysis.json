@@ -1,0 +1,274 @@
+{
+  "udfVersion": "0.1-poc",
+  "source": {
+    "fileName": "poc-fixed-pdfx4.pdf",
+    "absolutePath": "output/pdf/poc-fixed-pdfx4.pdf",
+    "bytes": 53791,
+    "sha256": "368450674674a15fb71dca450ecdcce8f15b0328dd1a77365dcee82afbf172cc",
+    "pdfFormat": "PDF 1.6",
+    "encrypted": false,
+    "pageCount": 1
+  },
+  "document": {
+    "metadata": {
+      "format": "PDF 1.6",
+      "title": "AI Print Production OS POC",
+      "author": "",
+      "subject": "",
+      "keywords": "",
+      "creator": "",
+      "producer": "GPL Ghostscript 10.07.1",
+      "creationDate": "D:20260803120900+08'00'",
+      "modDate": "D:20260803120900+08'00'",
+      "trapped": "",
+      "encryption": null
+    },
+    "pdfx": {
+      "declaredVersion": "PDF/X-4",
+      "hasOutputIntent": true,
+      "outputIntentReference": "[5 0 R]"
+    },
+    "colorSpaces": {
+      "used": [
+        "DeviceCMYK",
+        "DeviceGray"
+      ],
+      "structuralTokens": [
+        "DeviceCMYK"
+      ],
+      "confidence": {
+        "images": "high",
+        "pageOperators": "medium",
+        "structuralTokens": "low; may include unused resources"
+      }
+    },
+    "fonts": [
+      {
+        "xref": 13,
+        "name": "LCDNNI+Helvetica",
+        "resourceName": "R13",
+        "type": "Type1",
+        "encoding": "WinAnsiEncoding",
+        "extension": "cff",
+        "embedded": true,
+        "embeddedProgramBytes": 2914,
+        "referencerXref": 0
+      },
+      {
+        "xref": 11,
+        "name": "NFEEQF+Helvetica-Bold",
+        "resourceName": "R11",
+        "type": "Type1",
+        "encoding": "WinAnsiEncoding",
+        "extension": "cff",
+        "embedded": true,
+        "embeddedProgramBytes": 1124,
+        "referencerXref": 0
+      }
+    ],
+    "images": [
+      {
+        "page": 1,
+        "xref": 15,
+        "digestMd5": "a81bbfd37671686223b1b747a879e83e",
+        "pixelWidth": 600,
+        "pixelHeight": 400,
+        "bitsPerComponent": 8,
+        "colorSpace": "DeviceCMYK",
+        "components": 4,
+        "hasMask": false,
+        "bbox": {
+          "points": [
+            73.701,
+            325.983,
+            583.937,
+            666.14
+          ],
+          "mm": [
+            26.0,
+            115.0,
+            206.0,
+            234.999
+          ],
+          "widthMm": 180.0,
+          "heightMm": 120.0
+        },
+        "effectiveDpiX": 84.67,
+        "effectiveDpiY": 84.67,
+        "minEffectiveDpi": 84.67,
+        "transform": [
+          510.236,
+          0.0,
+          -0.0,
+          340.157,
+          73.7008,
+          325.983
+        ]
+      }
+    ]
+  },
+  "pages": [
+    {
+      "pageNumber": 1,
+      "rotation": 0,
+      "mediaBox": {
+        "explicit": true,
+        "points": [
+          0.0,
+          0.0,
+          657.64,
+          904.25
+        ],
+        "mm": [
+          0.0,
+          0.0,
+          232.001,
+          318.999
+        ],
+        "widthMm": 232.001,
+        "heightMm": 318.999
+      },
+      "cropBox": {
+        "explicit": true,
+        "points": [
+          0.0,
+          0.0,
+          657.638,
+          904.25
+        ],
+        "mm": [
+          0.0,
+          0.0,
+          232.0,
+          318.999
+        ],
+        "widthMm": 232.0,
+        "heightMm": 318.999
+      },
+      "trimBox": {
+        "explicit": true,
+        "points": [
+          31.181,
+          31.179,
+          626.457,
+          873.069
+        ],
+        "mm": [
+          11.0,
+          10.999,
+          221.0,
+          307.999
+        ],
+        "widthMm": 210.0,
+        "heightMm": 297.0
+      },
+      "bleedBox": {
+        "explicit": true,
+        "points": [
+          22.677,
+          22.675,
+          634.961,
+          881.573
+        ],
+        "mm": [
+          8.0,
+          7.999,
+          224.0,
+          310.999
+        ],
+        "widthMm": 216.0,
+        "heightMm": 303.0
+      },
+      "bleedMargins": {
+        "leftMm": 3.0,
+        "topMm": 3.0,
+        "rightMm": 3.0,
+        "bottomMm": 3.0
+      },
+      "fonts": [
+        {
+          "xref": 13,
+          "name": "LCDNNI+Helvetica",
+          "resourceName": "R13",
+          "type": "Type1",
+          "encoding": "WinAnsiEncoding",
+          "extension": "cff",
+          "embedded": true,
+          "embeddedProgramBytes": 2914,
+          "referencerXref": 0
+        },
+        {
+          "xref": 11,
+          "name": "NFEEQF+Helvetica-Bold",
+          "resourceName": "R11",
+          "type": "Type1",
+          "encoding": "WinAnsiEncoding",
+          "extension": "cff",
+          "embedded": true,
+          "embeddedProgramBytes": 1124,
+          "referencerXref": 0
+        }
+      ],
+      "images": [
+        {
+          "xref": 15,
+          "digestMd5": "a81bbfd37671686223b1b747a879e83e",
+          "pixelWidth": 600,
+          "pixelHeight": 400,
+          "bitsPerComponent": 8,
+          "colorSpace": "DeviceCMYK",
+          "components": 4,
+          "hasMask": false,
+          "bbox": {
+            "points": [
+              73.701,
+              325.983,
+              583.937,
+              666.14
+            ],
+            "mm": [
+              26.0,
+              115.0,
+              206.0,
+              234.999
+            ],
+            "widthMm": 180.0,
+            "heightMm": 120.0
+          },
+          "effectiveDpiX": 84.67,
+          "effectiveDpiY": 84.67,
+          "minEffectiveDpi": 84.67,
+          "transform": [
+            510.236,
+            0.0,
+            -0.0,
+            340.157,
+            73.7008,
+            325.983
+          ]
+        }
+      ],
+      "border": {
+        "sampledRgb": [
+          255,
+          255,
+          255
+        ],
+        "channelStdDev": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "uniformPixelRatio": 1.0,
+        "recommendedStrategy": "solid_color_extend",
+        "automationSafety": "auto"
+      }
+    }
+  ],
+  "limitations": [
+    "PDF object extraction is not semantic reconstruction of the original design tool file.",
+    "Color-space operator scanning is conservative and does not replace a standards validator or RIP proof.",
+    "Effective DPI is placement-dependent; rotated/sheared placements use transform-axis lengths.",
+    "A missing box defaults visually in PDF readers, so explicit box presence is reported separately."
+  ]
+}

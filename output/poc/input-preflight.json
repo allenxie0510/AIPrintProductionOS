@@ -1,0 +1,132 @@
+{
+  "engineVersion": "0.1-poc",
+  "status": "FAIL",
+  "productionScore": 0,
+  "summary": {
+    "fail": 6,
+    "warn": 1,
+    "info": 0
+  },
+  "policy": {
+    "requiredImageDpi": 300,
+    "requiredBleedMm": 3.0
+  },
+  "issues": [
+    {
+      "code": "COLOR.RGB_USED",
+      "severity": "FAIL",
+      "page": null,
+      "message": "RGB content is used in the PDF.",
+      "evidence": [
+        "DeviceRGB"
+      ],
+      "fix": {
+        "mode": "icc_convert_to_target_cmyk",
+        "safety": "review_required"
+      }
+    },
+    {
+      "code": "FONT.NOT_EMBEDDED",
+      "severity": "FAIL",
+      "page": null,
+      "message": "Font is not embedded: Helvetica",
+      "evidence": {
+        "xref": 2,
+        "type": "Type1"
+      },
+      "fix": {
+        "mode": "embed_exact_font_if_available_else_substitute",
+        "safety": "conditional"
+      }
+    },
+    {
+      "code": "FONT.NOT_EMBEDDED",
+      "severity": "FAIL",
+      "page": null,
+      "message": "Font is not embedded: Helvetica-Bold",
+      "evidence": {
+        "xref": 3,
+        "type": "Type1"
+      },
+      "fix": {
+        "mode": "embed_exact_font_if_available_else_substitute",
+        "safety": "conditional"
+      }
+    },
+    {
+      "code": "IMAGE.LOW_EFFECTIVE_DPI",
+      "severity": "FAIL",
+      "page": 1,
+      "message": "Placed image effective DPI is 84.67, below 300.",
+      "evidence": {
+        "xref": 4,
+        "dpi": 84.67,
+        "required": 300
+      },
+      "fix": {
+        "mode": "super_resolution_or_replace_source",
+        "safety": "review_required"
+      }
+    },
+    {
+      "code": "PAGE.TRIMBOX_MISSING",
+      "severity": "FAIL",
+      "page": 1,
+      "message": "TrimBox is not explicitly defined.",
+      "evidence": null,
+      "fix": {
+        "mode": "set_trimbox_from_confirmed_page_size",
+        "safety": "conditional"
+      }
+    },
+    {
+      "code": "PAGE.BLEED_INSUFFICIENT",
+      "severity": "FAIL",
+      "page": 1,
+      "message": "Explicit bleed of at least 3.0 mm is not present on every edge.",
+      "evidence": {
+        "marginsMm": {
+          "leftMm": 0.0,
+          "topMm": 0.0,
+          "rightMm": 0.0,
+          "bottomMm": 0.0
+        },
+        "borderClassification": {
+          "sampledRgb": [
+            20,
+            91,
+            158
+          ],
+          "channelStdDev": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "uniformPixelRatio": 1.0,
+          "recommendedStrategy": "solid_color_extend",
+          "automationSafety": "auto"
+        }
+      },
+      "fix": {
+        "mode": "solid_color_extend",
+        "safety": "auto"
+      }
+    },
+    {
+      "code": "PDFX.NOT_DECLARED",
+      "severity": "WARN",
+      "page": null,
+      "message": "PDF/X declaration and OutputIntent are incomplete or missing.",
+      "evidence": {
+        "declaredVersion": "unspecified",
+        "hasOutputIntent": false,
+        "outputIntentReference": null
+      },
+      "fix": {
+        "mode": "export_pdfx_with_output_intent",
+        "safety": "review_required"
+      }
+    }
+  ],
+  "scoreDisclaimer": "POC heuristic score; not a print guarantee or industry certification."
+}

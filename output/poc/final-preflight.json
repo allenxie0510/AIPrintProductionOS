@@ -1,0 +1,32 @@
+{
+  "engineVersion": "0.1-poc",
+  "status": "FAIL",
+  "productionScore": 82,
+  "summary": {
+    "fail": 1,
+    "warn": 0,
+    "info": 0
+  },
+  "policy": {
+    "requiredImageDpi": 300,
+    "requiredBleedMm": 3.0
+  },
+  "issues": [
+    {
+      "code": "IMAGE.LOW_EFFECTIVE_DPI",
+      "severity": "FAIL",
+      "page": 1,
+      "message": "Placed image effective DPI is 84.67, below 300.",
+      "evidence": {
+        "xref": 15,
+        "dpi": 84.67,
+        "required": 300
+      },
+      "fix": {
+        "mode": "super_resolution_or_replace_source",
+        "safety": "review_required"
+      }
+    }
+  ],
+  "scoreDisclaimer": "POC heuristic score; not a print guarantee or industry certification."
+}
