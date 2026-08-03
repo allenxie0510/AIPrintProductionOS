@@ -43,7 +43,7 @@ If the browser reports a CORS error together with `ERR_HTTP2_PROTOCOL_ERROR`, in
 
 ## Frontend deployment
 
-1. Set `NEXT_PUBLIC_API_BASE_URL` to the exact Render HTTPS origin during the frontend build.
+1. The checked-in production fallback must be the exact Render HTTPS origin. `NEXT_PUBLIC_API_BASE_URL` may override it for local or alternate environments; the production bundle test must reject `localhost` and `127.0.0.1` API targets.
 2. Run `npm ci`, `npm run lint`, and `npm test` in `frontend/`.
 3. Package the validated `frontend/dist` artifact and deploy it privately with Sites.
 4. Open the private URL and execute the complete workflow with a non-sensitive PDF.

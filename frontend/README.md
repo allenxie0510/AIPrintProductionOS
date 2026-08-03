@@ -8,7 +8,7 @@ npm ci
 npm run dev
 ```
 
-Set `NEXT_PUBLIC_API_BASE_URL` to the Python MVP API. The UI supports upload, preset selection, diagnosis, fix confirmation, post-fix validation, download, feedback and immediate file deletion.
+The production build defaults to `https://ai-print-production-os-api.onrender.com` so a missing hosted environment variable can never silently route a visitor to their own localhost. Set `NEXT_PUBLIC_API_BASE_URL` only when intentionally overriding the API origin, such as local development. The UI supports upload, preset selection, diagnosis, fix confirmation, post-fix validation, download, feedback and immediate file deletion.
 
 Validation:
 
