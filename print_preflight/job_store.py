@@ -39,6 +39,7 @@ class JobStore:
                     access_token_hash TEXT NOT NULL,
                     original_name TEXT NOT NULL,
                     preset_id TEXT NOT NULL,
+                    target_geometry_json TEXT,
                     status TEXT NOT NULL,
                     source_path TEXT,
                     output_path TEXT,
@@ -52,6 +53,12 @@ class JobStore:
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "target_geometry_json" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN target_geometry_json TEXT")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS feedback (
@@ -80,6 +87,7 @@ class JobStore:
         access_token: str,
         original_name: str,
         preset_id: str,
+        target_geometry: dict[str, Any],
         source_path: Path,
         expires_at: str,
     ) -> None:
@@ -88,15 +96,16 @@ class JobStore:
             connection.execute(
                 """
                 INSERT INTO jobs (
-                    id, access_token_hash, original_name, preset_id, status,
+                    id, access_token_hash, original_name, preset_id, target_geometry_json, status,
                     source_path, created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     token_hash(access_token),
                     original_name,
                     preset_id,
+                    json.dumps(target_geometry, ensure_ascii=False),
                     str(source_path),
                     now,
                     now,
@@ -110,7 +119,7 @@ class JobStore:
         if row is None:
             return None
         payload = dict(row)
-        for field in ("report_json", "fix_json", "error_json"):
+        for field in ("target_geometry_json", "report_json", "fix_json", "error_json"):
             payload[field.removesuffix("_json")] = json.loads(payload[field]) if payload[field] else None
             del payload[field]
         return payload

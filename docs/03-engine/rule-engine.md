@@ -25,6 +25,7 @@ Status: POC
 
 - Stable machine-readable codes; localized messages are presentation.
 - Thresholds come from versioned Print Presets.
+- Finished physical scale comes from the immutable user-confirmed Target Geometry; PDF page points remain parser observations.
 - The same UDF and preset must produce the same result.
 - Fix safety uses only `auto`, `confirm` or `manual`.
 - Every result records the Rule Set, all evaluated rule versions and the immutable Print Preset snapshot.
@@ -36,9 +37,12 @@ Status: POC
 - `COLOR.RGB_USED`
 - `FONT.NOT_EMBEDDED`
 - `IMAGE.LOW_EFFECTIVE_DPI`
+- `PAGE.TARGET_SIZE_MISMATCH`
 - `PAGE.TRIMBOX_MISSING`
 - `PAGE.BLEED_INSUFFICIENT`
 - `PDFX.NOT_DECLARED`
+
+`PAGE.TARGET_SIZE_MISMATCH` compares observed TrimBox/MediaBox dimensions with the confirmed finished size. Equal proportions within 2% may be normalized with `confirm`; incompatible proportions are `manual`. When proportions are compatible, image placement millimetres and Effective PPI are calculated at the target finished scale.
 
 ## Next Step
 

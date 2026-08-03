@@ -21,8 +21,8 @@ type Issue = {
 
 type Report = {
   analysis: { source: { pageCount: number; bytes: number }; pages: unknown[] };
-  preflight: { productionScore: number; status: string; issues: Issue[] };
-  afterPreflight?: { productionScore: number; status: string; issues: Issue[] };
+  preflight: PreflightResult;
+  afterPreflight?: PreflightResult;
   fixPlan: FixAction[];
   previews?: {
     source?: { available: boolean; page: number; width?: number; height?: number };
@@ -36,6 +36,34 @@ type Report = {
   } | null;
   providedFonts?: Array<{ expectedName: string; fontName: string; ready: boolean }>;
   validation?: { syntaxPassed: boolean; validator: string; pdfxState: string } | null;
+};
+
+type TargetGeometry = {
+  sizeId: string;
+  label: string;
+  widthMm: number;
+  heightMm: number;
+  source: string;
+  version: string;
+};
+
+type PageGeometry = {
+  page: number;
+  observedBox: string;
+  observedWidthMm: number;
+  observedHeightMm: number;
+  targetWidthMm: number;
+  targetHeightMm: number;
+  aspectRatioCompatible: boolean;
+  sizeMatches: boolean;
+  measurementBasis: string;
+};
+
+type PreflightResult = {
+  productionScore: number;
+  status: string;
+  issues: Issue[];
+  policy?: { targetGeometry?: TargetGeometry; pageGeometry?: PageGeometry[]; requiredBleedMm?: number };
 };
 
 type FixAction = {
@@ -54,6 +82,7 @@ type Job = {
   accessToken: string;
   fileName: string;
   presetId: string;
+  targetGeometry?: TargetGeometry;
   status: string;
   expiresAt: string;
   downloadAvailable: boolean;
@@ -64,15 +93,26 @@ type ApiError = { code?: string; message?: string };
 type JsonPayload = { error?: ApiError; status?: string; [key: string]: unknown };
 
 const presets = [
-  { id: "designer-standard-poc", label: "名片 / 宣传单", meta: "300 PPI · 3 mm 出血" },
-  { id: "poster-poc", label: "海报", meta: "150 PPI · 3 mm 出血" },
-  { id: "large-format-poc", label: "大幅喷绘", meta: "120 PPI · 5 mm 出血" },
+  { id: "designer-standard-poc", label: "商务印刷", meta: "300 PPI · 3 mm 出血", bleedMm: 3 },
+  { id: "poster-poc", label: "海报", meta: "150 PPI · 3 mm 出血", bleedMm: 3 },
+  { id: "large-format-poc", label: "大幅喷绘", meta: "120 PPI · 5 mm 出血", bleedMm: 5 },
+];
+
+const trimSizes = [
+  { id: "a4", label: "A4", width: 210, height: 297 },
+  { id: "a3", label: "A3", width: 297, height: 420 },
+  { id: "a5", label: "A5", width: 148, height: 210 },
+  { id: "b5-iso", label: "B5（ISO）", width: 176, height: 250 },
+  { id: "b5-jis", label: "B5（JIS）", width: 182, height: 257 },
+  { id: "business-card-cn", label: "名片", width: 90, height: 54 },
+  { id: "custom", label: "自定义尺寸", width: 600, height: 900 },
 ];
 
 const issueNames: Record<string, string> = {
   "COLOR.RGB_USED": "包含 RGB 对象",
   "FONT.NOT_EMBEDDED": "字体未嵌入",
   "IMAGE.LOW_EFFECTIVE_DPI": "图片有效分辨率不足",
+  "PAGE.TARGET_SIZE_MISMATCH": "PDF 页面尺寸与目标成品尺寸不同",
   "PAGE.TRIMBOX_MISSING": "缺少明确裁切框",
   "PAGE.BLEED_INSUFFICIENT": "出血不足",
   "PDFX.NOT_DECLARED": "缺少 PDF/X 输出条件",
@@ -99,10 +139,17 @@ const apiErrorMessages: Record<string, string> = {
   IMAGE_FORMAT_UNSUPPORTED: "请上传 PNG、JPEG、TIFF 或 WebP 图片。",
   FONT_NAME_MISMATCH: "字体名称与 PDF 请求的字体不一致。请上传原字体文件，或明确选择替代字体导出。",
   FONT_FORMAT_UNSUPPORTED: "请上传单个 TTF 或 OTF 字体文件。",
+  TARGET_TRIM_SIZE_INVALID: "成品尺寸无效。请选择标准尺寸，或输入 10–5000 mm 的自定义宽高。",
 };
 
 function issueEvidence(issue: Issue) {
   return issue.evidence && !Array.isArray(issue.evidence) ? issue.evidence : {};
+}
+
+function issueDescription(issue: Issue) {
+  if (issue.code !== "PAGE.TARGET_SIZE_MISMATCH") return issue.message;
+  const evidence = issueEvidence(issue);
+  return `PDF 当前约 ${String(evidence.observedWidthMm ?? "-")} × ${String(evidence.observedHeightMm ?? "-")} mm，目标成品为 ${String(evidence.targetWidthMm ?? "-")} × ${String(evidence.targetHeightMm ?? "-")} mm。`;
 }
 
 function issueKey(issue: Issue) {
@@ -130,6 +177,7 @@ function sameIssue(left: Issue, right: Issue) {
 
 const resolvedDescriptions: Record<string, string> = {
   "PAGE.TRIMBOX_MISSING": "已写入明确裁切框，并在外围工作区添加裁切标记。",
+  "PAGE.TARGET_SIZE_MISMATCH": "已按确认的成品尺寸等比缩放整页，并重新写入裁切框。",
   "PAGE.BLEED_INSUFFICIENT": "已补足可安全延展的纯色出血，并重新检查页面边缘。",
   "COLOR.RGB_USED": "已按目标 ICC 转换颜色并生成 CMYK 候选文件。",
   "PDFX.NOT_DECLARED": "已生成 PDF/X-4 候选和 OutputIntent，仍需印厂最终验证。",
@@ -232,6 +280,9 @@ function ImageIssueEvidence({ job, issue }: { job: Job; issue: Issue }) {
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [presetId, setPresetId] = useState(presets[0].id);
+  const [sizeId, setSizeId] = useState("");
+  const [trimWidthMm, setTrimWidthMm] = useState("");
+  const [trimHeightMm, setTrimHeightMm] = useState("");
   const [job, setJob] = useState<Job | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
@@ -259,11 +310,34 @@ export default function Home() {
     : issues;
   const phase = !job ? "upload" : deliveryMode ? "result" : hasRepairs ? "repair" : "diagnosis";
   const selectedPreset = useMemo(() => presets.find((item) => item.id === presetId)!, [presetId]);
+  const selectedSize = useMemo(() => trimSizes.find((item) => item.id === sizeId), [sizeId]);
+  const targetWidth = Number(trimWidthMm);
+  const targetHeight = Number(trimHeightMm);
+  const sizeValid = Boolean(sizeId) && Number.isFinite(targetWidth) && Number.isFinite(targetHeight)
+    && targetWidth >= 10 && targetHeight >= 10 && targetWidth <= 5000 && targetHeight <= 5000;
+  const targetGeometry = activePreflight?.policy?.targetGeometry ?? job?.targetGeometry;
+  const firstPageGeometry = activePreflight?.policy?.pageGeometry?.[0];
   const localPdfUrl = useMemo(() => file ? URL.createObjectURL(file) : "", [file]);
   const fixPlan = report?.fixPlan ?? [];
   const bleedAction = fixPlan.find((item) => item.action === "bleed_and_crop");
   const trimAction = fixPlan.find((item) => item.action === "trim_and_crop_marks");
   const pdfxAction = fixPlan.find((item) => item.action === "pdfx_candidate");
+
+  function choosePreset(nextPresetId: string) {
+    setPresetId(nextPresetId);
+  }
+
+  function chooseTrimSize(nextSizeId: string) {
+    const nextSize = trimSizes.find((item) => item.id === nextSizeId)!;
+    setSizeId(nextSize.id);
+    setTrimWidthMm(nextSize.id === "custom" ? "" : String(nextSize.width));
+    setTrimHeightMm(nextSize.id === "custom" ? "" : String(nextSize.height));
+  }
+
+  function swapOrientation() {
+    setTrimWidthMm(trimHeightMm);
+    setTrimHeightMm(trimWidthMm);
+  }
 
   useEffect(() => () => { if (localPdfUrl) URL.revokeObjectURL(localPdfUrl); }, [localPdfUrl]);
   useEffect(() => () => { if (sourcePreviewUrl) URL.revokeObjectURL(sourcePreviewUrl); }, [sourcePreviewUrl]);
@@ -303,7 +377,7 @@ export default function Home() {
   }
 
   async function analyze() {
-    if (!file) return;
+    if (!file || !sizeValid) return;
     setBusy(true);
     setBusyMessage("正在隔离解析 PDF 对象并生成诊断证据…");
     setError("");
@@ -313,6 +387,9 @@ export default function Home() {
       const body = new FormData();
       body.append("file", file);
       body.append("presetId", presetId);
+      body.append("sizeId", sizeId);
+      body.append("trimWidthMm", String(targetWidth));
+      body.append("trimHeightMm", String(targetHeight));
       const response = await fetch(`${API_BASE}/v1/jobs`, { method: "POST", body });
       const payload = await jsonPayload(response);
       if (!response.ok) throw new Error(apiErrorMessage(payload.error, "诊断失败，请检查文件后重试。"));
@@ -614,15 +691,38 @@ export default function Home() {
                 {file ? <><strong>{file.name}</strong><small>{formatBytes(file.size)} · 点击可重新选择</small></> : <><strong>拖入待交付的 PDF</strong><small>或点击选择文件 · 最大 100 MB / 20 页</small></>}
               </label>
 
-              <div className="preset-title"><span>目标产品</span><small>规则会根据实际印刷尺寸变化</small></div>
+              <div className="preset-title"><span>目标产品</span><small>决定 PPI、出血与颜色策略</small></div>
               <div className="preset-grid">
                 {presets.map((preset) => (
-                  <button type="button" key={preset.id} className={preset.id === presetId ? "preset selected" : "preset"} onClick={() => setPresetId(preset.id)}>
+                  <button type="button" key={preset.id} className={preset.id === presetId ? "preset selected" : "preset"} onClick={() => choosePreset(preset.id)}>
                     <strong>{preset.label}</strong><small>{preset.meta}</small>
                   </button>
                 ))}
               </div>
-              <button className="primary" disabled={!file || busy} onClick={analyze}>{busy ? "正在解析真实 PDF 对象…" : "开始印前诊断"}<span>→</span></button>
+
+              <div className="size-section">
+                <div className="preset-title"><span>目标成品尺寸（裁切后）</span><small>必选 · 不根据 Figma px 静默猜测</small></div>
+                <div className="size-picker">
+                  <label>
+                    <span>常用规格</span>
+                    <select value={sizeId} onChange={(event) => chooseTrimSize(event.target.value)}>
+                      <option value="" disabled>请选择成品尺寸</option>
+                      {trimSizes.map((size) => <option value={size.id} key={size.id}>{size.label}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" disabled={!sizeValid} onClick={swapOrientation} aria-label="交换成品尺寸的宽和高">↔ 横竖互换</button>
+                </div>
+                <div className="dimension-row">
+                  <label><span>宽</span><input type="number" min="10" max="5000" step="0.1" value={trimWidthMm} readOnly={sizeId !== "custom"} onChange={(event) => setTrimWidthMm(event.target.value)} /><em>mm</em></label>
+                  <b>×</b>
+                  <label><span>高</span><input type="number" min="10" max="5000" step="0.1" value={trimHeightMm} readOnly={sizeId !== "custom"} onChange={(event) => setTrimHeightMm(event.target.value)} /><em>mm</em></label>
+                </div>
+                <div className={sizeValid ? "size-confirmation" : "size-confirmation invalid"}>
+                  <b>{sizeValid ? `将按 ${selectedSize?.label} · ${targetWidth} × ${targetHeight} mm 诊断与输出` : sizeId === "custom" ? "请输入有效的成品宽高" : "请先确认目标成品尺寸"}</b>
+                  <span>Figma 的 px 只描述画布坐标。有效 PPI、TrimBox 和出血都会以这里确认的实际印刷尺寸为准。</span>
+                </div>
+              </div>
+              <button className="primary" disabled={!file || !sizeValid || busy} onClick={analyze}>{busy ? "正在解析真实 PDF 对象…" : "开始印前诊断"}<span>→</span></button>
               <p className="fineprint">上传即创建临时任务。源文件不可覆盖，下载后可立即删除。</p>
             </div>
           )}
@@ -631,8 +731,13 @@ export default function Home() {
             <div className="diagnosis-panel">
               <div className="score-row">
                 <div className="score"><span>{activePreflight?.productionScore ?? report.preflight.productionScore}</span><small>印前准备度</small></div>
-                <div><p className="eyebrow">{hasRepairs ? "逐项修复" : "诊断完成"}</p><h2>{job.fileName}</h2><p>{report.analysis.source.pageCount} 页 · {formatBytes(report.analysis.source.bytes)} · {selectedPreset.label}</p></div>
+                <div><p className="eyebrow">{hasRepairs ? "逐项修复" : "诊断完成"}</p><h2>{job.fileName}</h2><p>{report.analysis.source.pageCount} 页 · {formatBytes(report.analysis.source.bytes)} · {selectedPreset.label}{targetGeometry ? ` · ${targetGeometry.label} ${targetGeometry.widthMm} × ${targetGeometry.heightMm} mm` : ""}</p></div>
               </div>
+              {targetGeometry && firstPageGeometry && <div className="geometry-summary">
+                <div><small>目标成品尺寸</small><strong>{targetGeometry.label} · {targetGeometry.widthMm} × {targetGeometry.heightMm} mm</strong><span>设计师确认的 Trim Size</span></div>
+                <b>→</b>
+                <div><small>PDF 当前页面</small><strong>{firstPageGeometry.observedWidthMm} × {firstPageGeometry.observedHeightMm} mm</strong><span>{firstPageGeometry.aspectRatioCompatible ? firstPageGeometry.sizeMatches ? "尺寸一致" : "比例一致，可等比规范化" : "比例不一致，需要检查画布或尺寸选择"}</span></div>
+              </div>}
               {lastSuccess && <div className="success-banner" role="status"><b>✓</b><span><strong>修复完成</strong>{lastSuccess}</span></div>}
               <div className="repair-intro"><strong>按问题逐项处理</strong><span>每次只修改一个目标，完成后立即复检并更新左侧实际预览。</span></div>
               <div className="issue-list repair-list">
@@ -652,10 +757,14 @@ export default function Home() {
                     <article className={`repair-task ${resolved ? "resolved" : ""}`} key={key}>
                       <div className="repair-task-head">
                         <span className={resolved ? "task-state done" : `severity ${issue.severity.toLowerCase()}`}>{resolved ? "DONE" : issue.severity}</span>
-                        <div><h3>{issueNames[issue.code] ?? issue.code}</h3><p>{resolved ? resolvedDescriptions[issue.code] : issue.message}</p></div>
+                        <div><h3>{issueNames[issue.code] ?? issue.code}</h3><p>{resolved ? resolvedDescriptions[issue.code] : issueDescription(issue)}</p></div>
                       </div>
                       {!resolved && <div className="issue-action">
-                        {issue.code === "PAGE.TRIMBOX_MISSING" && trimAction?.executable && <button disabled={busy} onClick={() => applySingleFix("trim_and_crop_marks", key)}>{isWorking ? "正在设置…" : "设置裁切框"}</button>}
+                        {(issue.code === "PAGE.TRIMBOX_MISSING" || issue.code === "PAGE.TARGET_SIZE_MISMATCH") && trimAction?.executable && <>
+                          <button disabled={busy} onClick={() => applySingleFix("trim_and_crop_marks", key)}>{isWorking ? "正在规范成品尺寸…" : `按 ${targetGeometry?.label ?? "目标"} 设置尺寸与裁切框`}</button>
+                          <small className="action-explanation">{trimAction.reason}</small>
+                        </>}
+                        {issue.code === "PAGE.TARGET_SIZE_MISMATCH" && !trimAction?.executable && <div className="manual-guidance"><b>页面比例与目标尺寸不一致</b><span>请确认是否选错 A4/B5/横竖版；如果选择正确，请回 Figma 调整画布比例后重新导出。</span></div>}
                         {issue.code === "PAGE.BLEED_INSUFFICIENT" && bleedAction?.executable && <>
                           <button disabled={busy} onClick={() => applySingleFix("bleed_and_crop", key)}>{isWorking ? "正在补出血…" : bleedAction.method === "edge_pixel_mirror_extend" ? "生成 3 mm 图片出血" : "安全补足 3 mm 出血"}</button>
                           <small className="action-explanation">{bleedAction.reason}</small>

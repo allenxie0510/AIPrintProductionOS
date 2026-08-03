@@ -74,10 +74,20 @@ def presets() -> dict[str, list[dict]]:
 def create_job(
     background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File(description="PDF document")],
-    presetId: Annotated[str, Form()] = "designer-standard-poc",
+    presetId: Annotated[str, Form()],
+    sizeId: Annotated[str, Form()],
+    trimWidthMm: Annotated[float, Form()],
+    trimHeightMm: Annotated[float, Form()],
 ) -> dict:
     try:
-        result = service.create_job(file.file, file.filename, presetId)
+        result = service.create_job(
+            file.file,
+            file.filename,
+            presetId,
+            sizeId,
+            trimWidthMm,
+            trimHeightMm,
+        )
         background_tasks.add_task(service.analyze_job, result["jobId"])
         return result
     finally:

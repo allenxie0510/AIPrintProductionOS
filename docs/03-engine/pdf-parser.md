@@ -16,6 +16,8 @@ Status: POC
 
 The online adapter runs every analyze/fix/thumbnail stage in a separate process with configurable memory, CPU and wall-time limits. Resource exits become structured job failures instead of terminating the API process. When TrimBox is explicit, edge classification samples that finished-art boundary rather than a surrounding slug or prior crop-mark workspace.
 
+The parser reports PDF page dimensions in points and millimetres but does not infer A4, B5 or another intended product size. The rule layer combines these observations with the job's user-confirmed Target Geometry. This is required for Figma-style exports where pixel canvas coordinates may map to PDF points without preserving the intended physical production scale.
+
 ## Known Limits
 
 - PDF does not retain most source-tool semantics.
