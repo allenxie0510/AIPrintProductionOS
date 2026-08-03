@@ -3,15 +3,165 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 import pymupdf
 from PIL import Image, ImageStat
+from pypdf import PdfReader
+from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, IndirectObject, NameObject
+
+from .units import PT_PER_MM
 
 
-PT_PER_MM = 72.0 / 25.4
+MAX_XREFS = int(os.environ.get("PRINT_MVP_MAX_XREFS", "100000"))
+MAX_IMAGE_PIXELS = int(os.environ.get("PRINT_MVP_MAX_IMAGE_PIXELS", "50000000"))
+
+
+class PdfAnalysisLimitError(ValueError):
+    code = "PDF_COMPLEXITY_LIMIT_EXCEEDED"
+
+
+IDENTITY_MATRIX = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def _matrix_concat(
+    local: tuple[float, float, float, float, float, float] | list[Any],
+    current: tuple[float, float, float, float, float, float],
+) -> tuple[float, float, float, float, float, float]:
+    a1, b1, c1, d1, e1, f1 = (float(value) for value in local)
+    a2, b2, c2, d2, e2, f2 = current
+    return (
+        a1 * a2 + b1 * c2,
+        a1 * b2 + b1 * d2,
+        c1 * a2 + d1 * c2,
+        c1 * b2 + d1 * d2,
+        e1 * a2 + f1 * c2 + e2,
+        e1 * b2 + f1 * d2 + f2,
+    )
+
+
+def _object(value: Any) -> Any:
+    return value.get_object() if isinstance(value, IndirectObject) else value
+
+
+def _color_space(value: Any, resources: DictionaryObject | None) -> tuple[str, int]:
+    value = _object(value)
+    if isinstance(value, ArrayObject) and value:
+        name = str(_object(value[0])).lstrip("/")
+        if name == "ICCBased" and len(value) > 1:
+            profile = _object(value[1])
+            return name, int(profile.get("/N", 0)) if isinstance(profile, DictionaryObject) else 0
+    elif isinstance(value, NameObject) or isinstance(value, str):
+        name = str(value).lstrip("/")
+        if name not in {"DeviceGray", "DeviceRGB", "DeviceCMYK", "Lab", "Separation", "DeviceN", "ICCBased"}:
+            spaces = _object(resources.get("/ColorSpace")) if resources else None
+            if isinstance(spaces, DictionaryObject) and value in spaces:
+                return _color_space(spaces.raw_get(value), resources)
+        return name, {"DeviceGray": 1, "DeviceRGB": 3, "DeviceCMYK": 4}.get(name, 0)
+    return "unknown", 0
+
+
+def _placement_bbox(
+    ctm: tuple[float, float, float, float, float, float],
+    page_transform: pymupdf.Matrix,
+) -> pymupdf.Rect:
+    a, b, c, d, e, f = ctm
+    pdf_points = (
+        (e, f),
+        (a + e, b + f),
+        (c + e, d + f),
+        (a + c + e, b + d + f),
+    )
+    page_points = [pymupdf.Point(x, y) * page_transform for x, y in pdf_points]
+    return pymupdf.Rect(
+        min(point.x for point in page_points),
+        min(point.y for point in page_points),
+        max(point.x for point in page_points),
+        max(point.y for point in page_points),
+    )
+
+
+def _walk_image_placements(
+    stream: Any,
+    resources: DictionaryObject | None,
+    reader: PdfReader,
+    page_transform: pymupdf.Matrix,
+    *,
+    ctm: tuple[float, float, float, float, float, float] = IDENTITY_MATRIX,
+    form_path: frozenset[int] = frozenset(),
+    depth: int = 0,
+) -> list[dict[str, Any]]:
+    if stream is None:
+        return []
+    if depth > 24:
+        raise PdfAnalysisLimitError("PDF Form XObject nesting exceeds the safe limit (24).")
+    placements: list[dict[str, Any]] = []
+    stack: list[tuple[float, float, float, float, float, float]] = []
+    for operands, operator in ContentStream(stream, reader).operations:
+        if operator == b"q":
+            stack.append(ctm)
+        elif operator == b"Q":
+            if stack:
+                ctm = stack.pop()
+        elif operator == b"cm" and len(operands) == 6:
+            ctm = _matrix_concat(operands, ctm)
+        elif operator == b"Do" and resources:
+            xobjects = _object(resources.get("/XObject"))
+            name = operands[0] if operands else None
+            if not isinstance(xobjects, DictionaryObject) or name not in xobjects:
+                continue
+            reference = xobjects.raw_get(name)
+            xobject = _object(reference)
+            if not isinstance(xobject, DictionaryObject):
+                continue
+            subtype = str(xobject.get("/Subtype"))
+            xref = reference.idnum if isinstance(reference, IndirectObject) else 0
+            if subtype == "/Image":
+                color_name, components = _color_space(xobject.get("/ColorSpace"), resources)
+                placements.append(
+                    {
+                        "xref": xref,
+                        "width": int(xobject.get("/Width", 0)),
+                        "height": int(xobject.get("/Height", 0)),
+                        "bpc": int(xobject.get("/BitsPerComponent", 0)),
+                        "cs-name": color_name,
+                        "colorspace": components,
+                        "has-mask": "/Mask" in xobject or "/SMask" in xobject,
+                        "bbox": _placement_bbox(ctm, page_transform),
+                        "transform": ctm,
+                    }
+                )
+            elif subtype == "/Form":
+                form_key = xref or id(xobject)
+                if form_key in form_path:
+                    raise PdfAnalysisLimitError("PDF contains a cyclic Form XObject reference.")
+                form_ctm = _matrix_concat(xobject.get("/Matrix", IDENTITY_MATRIX), ctm)
+                form_resources = _object(xobject.get("/Resources")) or resources
+                placements.extend(
+                    _walk_image_placements(
+                        xobject,
+                        form_resources,
+                        reader,
+                        page_transform,
+                        ctm=form_ctm,
+                        form_path=form_path | {form_key},
+                        depth=depth + 1,
+                    )
+                )
+    return placements
+
+
+def _page_image_info(
+    reader: PdfReader,
+    page_number: int,
+    page_transform: pymupdf.Matrix,
+) -> list[dict[str, Any]]:
+    page = reader.pages[page_number - 1]
+    resources = _object(page.get("/Resources"))
+    return _walk_image_placements(page.get_contents(), resources, reader, page_transform)
 
 
 def pt_to_mm(value: float) -> float:
@@ -99,7 +249,7 @@ def _font_payload(doc: pymupdf.Document, item: tuple[Any, ...]) -> dict[str, Any
     }
 
 
-def _image_payload(info: dict[str, Any]) -> dict[str, Any]:
+def _image_payload(info: dict[str, Any], placement_index: int) -> dict[str, Any]:
     transform = list(info.get("transform") or [0, 0, 0, 0, 0, 0])
     x_axis_pt = math.hypot(float(transform[0]), float(transform[1]))
     y_axis_pt = math.hypot(float(transform[2]), float(transform[3]))
@@ -110,6 +260,7 @@ def _image_payload(info: dict[str, Any]) -> dict[str, Any]:
     bbox = pymupdf.Rect(info["bbox"])
     digest = info.get("digest")
     return {
+        "placementIndex": placement_index,
         "xref": int(info.get("xref", 0)),
         "digestMd5": digest.hex() if isinstance(digest, bytes) else None,
         "pixelWidth": width_px,
@@ -127,17 +278,32 @@ def _image_payload(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def _border_classification(page: pymupdf.Page) -> dict[str, Any]:
-    pix = page.get_pixmap(matrix=pymupdf.Matrix(1, 1), alpha=False, colorspace=pymupdf.csRGB)
-    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    band = max(2, min(5, min(image.size) // 100))
+    page_rect = page.rect
+    min_dimension = min(page_rect.width, page_rect.height)
+    if min_dimension < 8:
+        raise PdfAnalysisLimitError("PDF page is too small for safe edge classification.")
+    band = max(2.0, min(5.0, min_dimension / 100.0))
     # MuPDF may antialias the exact page boundary against white. Sampling two
     # pixels inward avoids mistaking that renderer artifact for page artwork.
-    inset = 2
-    pixels = []
-    pixels.extend(image.crop((inset, inset, image.width - inset, inset + band)).get_flattened_data())
-    pixels.extend(image.crop((inset, image.height - inset - band, image.width - inset, image.height - inset)).get_flattened_data())
-    pixels.extend(image.crop((inset, inset + band, inset + band, image.height - inset - band)).get_flattened_data())
-    pixels.extend(image.crop((image.width - inset - band, inset + band, image.width - inset, image.height - inset - band)).get_flattened_data())
+    inset = 2.0
+    clips = [
+        pymupdf.Rect(page_rect.x0 + inset, page_rect.y0 + inset, page_rect.x1 - inset, page_rect.y0 + inset + band),
+        pymupdf.Rect(page_rect.x0 + inset, page_rect.y1 - inset - band, page_rect.x1 - inset, page_rect.y1 - inset),
+        pymupdf.Rect(page_rect.x0 + inset, page_rect.y0 + inset + band, page_rect.x0 + inset + band, page_rect.y1 - inset - band),
+        pymupdf.Rect(page_rect.x1 - inset - band, page_rect.y0 + inset + band, page_rect.x1 - inset, page_rect.y1 - inset - band),
+    ]
+    pixels: list[tuple[int, int, int]] = []
+    rendered_pixels = 0
+    for clip in clips:
+        pix = page.get_pixmap(
+            matrix=pymupdf.Matrix(1, 1),
+            alpha=False,
+            colorspace=pymupdf.csRGB,
+            clip=clip,
+        )
+        image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        rendered_pixels += pix.width * pix.height
+        pixels.extend(image.get_flattened_data())
     sample = Image.new("RGB", (len(pixels), 1))
     sample.putdata(pixels)
     stat = ImageStat.Stat(sample)
@@ -159,17 +325,32 @@ def _border_classification(page: pymupdf.Page) -> dict[str, Any]:
         "sampledRgb": list(median),
         "channelStdDev": list(stddev),
         "uniformPixelRatio": round(uniform_ratio, 4),
+        "sampledPixelCount": len(pixels),
+        "renderedPixelCount": rendered_pixels,
+        "samplingMethod": "four_edge_clips_72ppi",
         "recommendedStrategy": strategy,
         "automationSafety": safety,
     }
 
 
-def analyze_pdf(path: str | Path) -> dict[str, Any]:
+def analyze_pdf(
+    path: str | Path,
+    *,
+    max_pages: int | None = None,
+    max_xrefs: int = MAX_XREFS,
+    max_image_pixels: int = MAX_IMAGE_PIXELS,
+) -> dict[str, Any]:
     source = Path(path).resolve()
-    raw = source.read_bytes()
+    with source.open("rb") as handle:
+        source_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
     doc = pymupdf.open(source)
     if doc.needs_pass:
         raise ValueError("Password-protected PDFs require an explicit password workflow")
+    if max_pages is not None and doc.page_count > max_pages:
+        raise PdfAnalysisLimitError(f"PDF exceeds the {max_pages}-page limit.")
+    if doc.xref_length() > max_xrefs:
+        raise PdfAnalysisLimitError(f"PDF exceeds the safe object limit ({max_xrefs}).")
+    reader = PdfReader(str(source), strict=False)
 
     pages: list[dict[str, Any]] = []
     document_fonts: dict[tuple[int, str], dict[str, Any]] = {}
@@ -177,13 +358,28 @@ def analyze_pdf(path: str | Path) -> dict[str, Any]:
     all_images: list[dict[str, Any]] = []
 
     for page_number, page in enumerate(doc, start=1):
+        for image in page.get_images(full=True):
+            width_px = int(image[2])
+            height_px = int(image[3])
+            if width_px * height_px > max_image_pixels:
+                raise PdfAnalysisLimitError(
+                    f"Page {page_number} contains an image above the safe pixel limit ({max_image_pixels})."
+                )
         font_items = []
         for item in page.get_fonts(full=True):
             payload = _font_payload(doc, item)
             font_items.append(payload)
             document_fonts[(payload["xref"], payload["name"])] = payload
 
-        images = [_image_payload(info) for info in page.get_image_info(hashes=True, xrefs=True)]
+        # MuPDF's get_image_info() builds a page display list and can consume
+        # hundreds of MB for a small compressed large-format PDF. The
+        # content-stream walker records image XObjects and their CTMs without
+        # decoding image pixels, preserving effective-PPI evidence at bounded
+        # memory cost.
+        images = [
+            _image_payload(info, placement_index)
+            for placement_index, info in enumerate(_page_image_info(reader, page_number, page.transformation_matrix), start=1)
+        ]
         all_images.extend({"page": page_number, **image} for image in images)
         used_color_spaces.update(image["colorSpace"] for image in images)
         used_color_spaces.update(_stream_color_operators(doc, page))
@@ -234,8 +430,8 @@ def analyze_pdf(path: str | Path) -> dict[str, Any]:
         "source": {
             "fileName": source.name,
             "absolutePath": str(source),
-            "bytes": len(raw),
-            "sha256": hashlib.sha256(raw).hexdigest(),
+            "bytes": source.stat().st_size,
+            "sha256": source_sha256,
             "pdfFormat": metadata.get("format"),
             "encrypted": bool(doc.is_encrypted),
             "pageCount": doc.page_count,
@@ -251,7 +447,7 @@ def analyze_pdf(path: str | Path) -> dict[str, Any]:
                 "used": sorted(value for value in used_color_spaces if value),
                 "structuralTokens": _document_color_tokens(doc),
                 "confidence": {
-                    "images": "high",
+                    "images": "high for image XObjects; inline images remain a known limit",
                     "pageOperators": "medium",
                     "structuralTokens": "low; may include unused resources",
                 },

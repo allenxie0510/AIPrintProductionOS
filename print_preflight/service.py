@@ -9,8 +9,12 @@ from pathlib import Path
 from typing import Any, BinaryIO
 from uuid import uuid4
 
-from .analyzer import analyze_pdf
-from .fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk
+from .isolated import (
+    EngineProcessError,
+    add_bleed_and_crop_marks_isolated,
+    analyze_pdf_isolated,
+    export_pdfx4_cmyk_isolated,
+)
 from .job_store import JobStore
 from .presets import PrintPreset, get_print_preset
 from .profiles import resolve_cmyk_profile
@@ -104,9 +108,7 @@ class PreflightService:
         source = Path(job["source_path"])
         self.store.update(job_id, status="analyzing")
         try:
-            analysis = analyze_pdf(source)
-            if analysis["source"]["pageCount"] > MAX_PAGES:
-                raise MvpError("PAGE_LIMIT_EXCEEDED", f"PDF exceeds the {MAX_PAGES}-page limit.", 413)
+            analysis = analyze_pdf_isolated(source, max_pages=MAX_PAGES)
             preflight = run_preflight(analysis, preset=get_print_preset(job["preset_id"]))
             report = {
                 "analysis": public_analysis(analysis, self.data_dir),
@@ -116,6 +118,9 @@ class PreflightService:
             }
             self.store.update(job_id, status="awaiting_decision", report_json=report)
         except MvpError as error:
+            self.store.update(job_id, status="failed", error_json={"code": error.code, "message": error.message})
+            return
+        except EngineProcessError as error:
             self.store.update(job_id, status="failed", error_json={"code": error.code, "message": error.message})
             return
         except Exception as error:
@@ -190,10 +195,10 @@ class PreflightService:
         try:
             if "bleed_and_crop" in actions:
                 boxed = job_dir / "boxed.pdf"
-                result = add_bleed_and_crop_marks(
+                result = add_bleed_and_crop_marks_isolated(
                     working,
                     boxed,
-                    analyze_pdf(working),
+                    analyze_pdf_isolated(working, max_pages=MAX_PAGES),
                     bleed_mm=get_print_preset(job["preset_id"]).bleed_mm,
                 )
                 fix_results.append(public_analysis(result, self.data_dir))
@@ -201,7 +206,7 @@ class PreflightService:
             if "pdfx_candidate" in actions:
                 candidate = job_dir / "print-ready-candidate.pdf"
                 profile = resolve_cmyk_profile()
-                result = export_pdfx4_cmyk(working, candidate, profile, job_dir)
+                result = export_pdfx4_cmyk_isolated(working, candidate, profile, job_dir)
                 fix_results.append(public_analysis(result, self.data_dir))
                 working = candidate
             elif working != source:
@@ -210,7 +215,7 @@ class PreflightService:
                 working = candidate
 
             self.store.update(job_id, status="validating")
-            after_analysis = analyze_pdf(working)
+            after_analysis = analyze_pdf_isolated(working, max_pages=MAX_PAGES)
             preset: PrintPreset = get_print_preset(job["preset_id"])
             after_preflight = run_preflight(after_analysis, preset=preset)
             validation = self._validate(working)
@@ -237,6 +242,13 @@ class PreflightService:
             return {**self.public_job(job_id), "report": updated_report}
         except MvpError:
             raise
+        except EngineProcessError as error:
+            self.store.update(
+                job_id,
+                status="awaiting_decision",
+                error_json={"code": error.code, "message": error.message},
+            )
+            raise MvpError(error.code, error.message, 422) from error
         except Exception as error:
             self.store.update(
                 job_id,

@@ -112,6 +112,28 @@ jobs:
           test "$(jq '.presets | length' /tmp/presets.json)" -ge 3
           docker exec printready-ci python -c 'from print_preflight.fixer import supports_pdfx4; from print_preflight.profiles import resolve_cmyk_profile; assert supports_pdfx4(); assert resolve_cmyk_profile().is_file()'
 
+      - name: Verify isolated large-format analysis limit
+        run: |
+          docker exec -i printready-ci python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          import pymupdf
+
+          from print_preflight.isolated import analyze_pdf_isolated
+
+          with TemporaryDirectory() as directory:
+              source = Path(directory) / "large-format.pdf"
+              with pymupdf.open() as document:
+                  page = document.new_page(width=5280, height=7500)
+                  page.draw_rect(page.rect, color=(0.9, 0.2, 0.1), fill=(0.9, 0.2, 0.1))
+                  document.save(source)
+              analysis = analyze_pdf_isolated(source, max_pages=20)
+              border = analysis["pages"][0]["border"]
+              assert border["renderedPixelCount"] < 150_000
+              assert border["automationSafety"] == "auto"
+          PY
+
       - name: Show container logs
         if: always()
         run: docker logs printready-ci || true

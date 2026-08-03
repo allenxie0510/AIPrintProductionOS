@@ -17,6 +17,12 @@ services:
         value: "104857600"
       - key: PRINT_MVP_MAX_PAGES
         value: "20"
+      - key: PRINT_MVP_ENGINE_MEMORY_BYTES
+        value: "335544320"
+      - key: PRINT_MVP_ENGINE_CPU_SECONDS
+        value: "90"
+      - key: PRINT_MVP_ENGINE_TIMEOUT_SECONDS
+        value: "120"
       - key: PRINT_MVP_FILE_TTL_SECONDS
         value: "86400"
       - key: PRINT_POC_CMYK_PROFILE
