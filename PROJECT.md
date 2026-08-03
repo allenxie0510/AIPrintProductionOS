@@ -1,7 +1,7 @@
 # AI Print Production OS — Project Memory
 
 - Version: 1.1.0-alpha
-- Status: Local Web MVP complete; production hardening active
+- Status: Public online demo deployment in progress; production hardening active
 - Strategy: PDF first
 - Last updated: 2026-08-03
 
@@ -74,7 +74,7 @@ Completed:
 In progress:
 
 - Durable queue and object-storage adapters.
-- PDF engine license decision and worker-container isolation.
+- Public AGPL demo deployment and worker-container isolation.
 - Independent PDF/X validation and print-provider presets.
 
 MVP delivered:
@@ -86,7 +86,7 @@ MVP delivered:
 
 Release gates:
 
-- Artifex commercial license, compliant open-source model, or approved replacement stack.
+- Commercial Artifex license or approved replacement stack before any proprietary/closed-source deployment; the public evaluation uses the documented AGPL path.
 - Independent PDF/X validator.
 - Two print-provider-reviewed Alpha Print Presets and ICC profiles.
 - Production isolation, temporary storage and deletion audit.

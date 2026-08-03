@@ -82,3 +82,40 @@ jobs:
             output/pdf/poc-fixed-pdfx4.pdf
           if-no-files-found: warn
           retention-days: 14
+
+  verify-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production demo image
+        run: docker build --tag ai-print-production-os:ci .
+
+      - name: Start API container
+        run: docker run --detach --name printready-ci --publish 10000:10000 ai-print-production-os:ci
+
+      - name: Verify runtime and health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:10000/health; then
+              break
+            fi
+            if [ "$attempt" = 30 ]; then
+              docker logs printready-ci
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:10000/v1/presets > /tmp/presets.json
+          test "$(jq '.presets | length' /tmp/presets.json)" -ge 3
+          docker exec printready-ci python -c 'from print_preflight.fixer import supports_pdfx4; from print_preflight.profiles import resolve_cmyk_profile; assert supports_pdfx4(); assert resolve_cmyk_profile().is_file()'
+
+      - name: Show container logs
+        if: always()
+        run: docker logs printready-ci || true
+
+      - name: Stop API container
+        if: always()
+        run: docker rm --force printready-ci || true

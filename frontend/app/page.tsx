@@ -354,7 +354,7 @@ export default function Home() {
         <div><strong>Evidence first</strong><span>每个判断都有页面、对象或测量证据</span></div>
         <div><strong>Human authority</strong><span>高风险修复必须由设计师确认</span></div>
       </section>
-      <footer><span>AI Print Production OS · Alpha MVP</span><span>候选文件不能替代印厂打样与最终验收</span></footer>
+      <footer><span>AI Print Production OS · Alpha MVP · <a href="https://github.com/allenxie0510/AIPrintProductionOS" target="_blank" rel="noreferrer">AGPL 源码</a></span><span>候选文件不能替代印厂打样与最终验收</span></footer>
     </main>
   );
 }

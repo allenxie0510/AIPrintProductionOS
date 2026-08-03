@@ -4,7 +4,9 @@
 
 PDF-first 的 AI 印前分析与生产操作系统。第一阶段目标不是重建 Figma/Canva，而是把 PDF 预检、风险分级、受控修复和可审计输出做到可靠。
 
-当前状态：**本地可运行的 Web MVP 已完成；生产部署仍受许可证、隔离和独立 PDF/X 验证 Gate 约束。**
+本仓库按 [GNU Affero General Public License v3.0](LICENSE) 发布。线上服务用户可以在本仓库取得对应源码；第三方引擎说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+当前状态：**本地 Web MVP 已完成，公开 AGPL 在线演示正在部署；专有生产部署仍受商业许可、隔离和独立 PDF/X 验证 Gate 约束。**
 
 ## 从这里开始
 
@@ -86,3 +88,7 @@ MVP 已包含：
 ```
 
 生产环境必须把应用内后台任务替换为持久队列，并使用对象存储、容器隔离、恶意文件扫描、限流和独立 PDF/X 验证器。
+
+## 部署在线演示
+
+仓库根目录的 `Dockerfile` 固定并校验 Ghostscript 10.07.1，`render.yaml` 提供新加坡区域的单实例 Render 演示服务。完整步骤和限制见 [`docs/08-operations/deployment.md`](docs/08-operations/deployment.md)。

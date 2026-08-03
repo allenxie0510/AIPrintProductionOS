@@ -47,6 +47,10 @@ This directory is the project memory. It stores adopted specifications and decis
 
 - [AI operating model](07-ai-rules/operating-model.md)
 
+## 08 - Operations
+
+- [Online demo deployment](08-operations/deployment.md)
+
 ## Governance
 
 - [Architecture Decision Records](decisions/README.md)
