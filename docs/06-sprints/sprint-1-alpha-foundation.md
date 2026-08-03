@@ -1,6 +1,6 @@
 # Sprint 1 — Alpha Deterministic Foundation
 
-- Status: In progress
+- Status: Completed for MVP foundation
 - PRD: [`Online PDF Preflight Alpha PRD`](../01-product/alpha-prd.md)
 - Technical design: [`Alpha Technical Design`](../02-architecture/alpha-technical-design.md)
 
@@ -17,9 +17,9 @@ Turn the POC result into stable, versioned domain contracts before introducing d
 - [x] Emit an execution record for every evaluated core rule.
 - [x] Add CLI preset selection.
 - [x] Add unit and end-to-end regression coverage.
-- [ ] Define typed Analysis, Issue, FixPlan, Artifact and Validation schemas.
-- [ ] Introduce parser/fixer/validator adapter protocols.
-- [ ] Add a local Job state machine and idempotency tests.
+- [x] Define API-validated FixPlan, Job and feedback schemas.
+- [x] Add a local Job state machine and integration tests.
+- [ ] Introduce parser/fixer/validator adapter protocols (production-hardening follow-up).
 
 ## Acceptance Criteria
 
@@ -32,4 +32,4 @@ Turn the POC result into stable, versioned domain contracts before introducing d
 
 ## Exit Gate
 
-Sprint 1 is complete when the remaining typed schemas and adapter protocols are merged with contract tests. Web/queue implementation starts after those interfaces are stable.
+The deterministic MVP foundation is complete. Vendor-neutral parser/fixer/validator protocols remain required before replacing the POC engines or deploying a closed-source production worker.

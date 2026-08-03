@@ -1,7 +1,7 @@
 # AI Print Production OS — Project Memory
 
 - Version: 1.1.0-alpha
-- Status: Active Alpha development
+- Status: Local Web MVP complete; production hardening active
 - Strategy: PDF first
 - Last updated: 2026-08-03
 
@@ -73,9 +73,16 @@ Completed:
 
 In progress:
 
-- Versioned Print Preset and Rule Set foundation.
-- Rule execution audit data.
-- Governance consolidation.
+- Durable queue and object-storage adapters.
+- PDF engine license decision and worker-container isolation.
+- Independent PDF/X validation and print-provider presets.
+
+MVP delivered:
+
+- Responsive designer Web workflow.
+- Ephemeral PDF jobs with token-scoped access, SQLite metadata and TTL cleanup.
+- Upload → analyze → review → controlled fix → re-analyze → validate → download → delete.
+- Feedback capture and privacy-safe metadata retention after artifact deletion.
 
 Release gates:
 

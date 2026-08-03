@@ -6,3 +6,4 @@ tmp/pdfs/*.png
 tmp/pdfs/*.ps
 output/poc/rendered/*
 !output/poc/rendered/final-poppler.png
+var/

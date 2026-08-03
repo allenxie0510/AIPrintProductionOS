@@ -34,12 +34,14 @@ This directory is the project memory. It stores adopted specifications and decis
 ## 05 - Testing
 
 - [POC validation](05-testing/poc-validation.md)
+- [Web MVP validation](05-testing/mvp-validation.md)
 - [Technical feasibility report](05-testing/technical-feasibility-report.md)
 
 ## 06 - Sprints
 
 - [Sprint 0](06-sprints/sprint-0.md)
 - [Sprint 1 - Alpha deterministic foundation](06-sprints/sprint-1-alpha-foundation.md)
+- [Sprint 2 - Designer Web MVP](06-sprints/sprint-2-web-mvp.md)
 
 ## 07 - AI Rules
 

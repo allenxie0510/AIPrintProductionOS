@@ -4,7 +4,7 @@
 
 PDF-first 的 AI 印前分析与生产操作系统。第一阶段目标不是重建 Figma/Canva，而是把 PDF 预检、风险分级、受控修复和可审计输出做到可靠。
 
-当前状态：**PDF Preflight POC 已验证，准备进入 Alpha 规划。**
+当前状态：**本地可运行的 Web MVP 已完成；生产部署仍受许可证、隔离和独立 PDF/X 验证 Gate 约束。**
 
 ## 从这里开始
 
@@ -48,3 +48,41 @@ python3 -m venv --system-site-packages .venv
 - `output/pdf/poc-fixed-pdfx4.pdf`
 
 POC 输出不构成印厂验收或 PDF/X 独立合规认证。
+
+## 运行 Web MVP
+
+后端：
+
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/uvicorn print_preflight.api:app --reload --host 127.0.0.1 --port 8000
+```
+
+前端（另一个终端）：
+
+```bash
+cd frontend
+cp .env.example .env.local
+npm ci
+npm run dev
+```
+
+打开前端显示的本地地址。API 文档位于 `http://127.0.0.1:8000/docs`。
+
+MVP 已包含：
+
+- PDF 上传、签名/大小/页数检查和匿名任务访问令牌。
+- 任务状态、版本化 Print Preset、规则证据和准备度评分。
+- 纯色出血/裁切标记以及经明确确认的 PDF/X-4 候选输出。
+- 修复后重新分析、qpdf 结构验证、下载和立即删除。
+- SQLite 结构化元数据、反馈和到期文件清理。
+- 响应式设计师 Web 界面。
+
+清理过期任务：
+
+```bash
+.venv/bin/python scripts/cleanup_jobs.py
+```
+
+生产环境必须把应用内后台任务替换为持久队列，并使用对象存储、容器隔离、恶意文件扫描、限流和独立 PDF/X 验证器。

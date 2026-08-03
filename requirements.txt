@@ -2,3 +2,7 @@ PyMuPDF==1.26.3
 pypdf==6.10.0
 reportlab==4.4.9
 Pillow==12.2.0
+fastapi==0.141.1
+uvicorn==0.52.1
+python-multipart==0.0.32
+httpx==0.28.1
