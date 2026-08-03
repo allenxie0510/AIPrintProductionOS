@@ -41,3 +41,5 @@ qpdf --check output/pdf/poc-fixed-pdfx4.pdf
 - `output/pdf/poc-fixed-pdfx4.pdf`
 
 The candidate PDF has not passed an independent ISO PDF/X conformance validator or print-provider acceptance test.
+
+GitHub Actions runs the same tests and end-to-end POC on Linux with an explicitly selected POC CMYK profile, then uploads the JSON, rendered preview and PDF as short-lived workflow artifacts.

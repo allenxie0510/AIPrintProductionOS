@@ -1,5 +1,7 @@
 # AI Print Production OS
 
+[![PDF Preflight POC](https://github.com/allenxie0510/AIPrintProductionOS/actions/workflows/poc-ci.yml/badge.svg)](https://github.com/allenxie0510/AIPrintProductionOS/actions/workflows/poc-ci.yml)
+
 PDF-first 的 AI 印前分析与生产操作系统。第一阶段目标不是重建 Figma/Canva，而是把 PDF 预检、风险分级、受控修复和可审计输出做到可靠。
 
 当前状态：**PDF Preflight POC 已验证，准备进入 Alpha 规划。**
@@ -31,6 +33,7 @@ POC 验证了：
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install -r requirements.txt
 # macOS POC system tools: brew install ghostscript qpdf little-cms2
+# Linux/CI: set PRINT_POC_CMYK_PROFILE when the profile is not in a standard path
 .venv/bin/python scripts/run_poc.py
 .venv/bin/python -m unittest discover -s tests -v
 ```

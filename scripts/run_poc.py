@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from print_preflight.analyzer import analyze_pdf, write_json
 from print_preflight.fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk
+from print_preflight.profiles import resolve_cmyk_profile
 from print_preflight.rules import run_preflight
 from scripts.generate_samples import make_sample
 
@@ -24,7 +25,7 @@ BOX_FIXED = ROOT / "tmp/pdfs/poc-box-fixed.pdf"
 FINAL = ROOT / "output/pdf/poc-fixed-pdfx4.pdf"
 OUTPUT = ROOT / "output/poc"
 RENDERED = OUTPUT / "rendered"
-CMYK_PROFILE = Path("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc")
+CMYK_PROFILE = resolve_cmyk_profile()
 
 
 def portable_paths(value):

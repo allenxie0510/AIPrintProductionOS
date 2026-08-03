@@ -7,11 +7,15 @@ from pathlib import Path
 
 from print_preflight.analyzer import analyze_pdf
 from print_preflight.fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk
+from print_preflight.profiles import resolve_cmyk_profile
 from print_preflight.rules import run_preflight
 from scripts.generate_samples import make_sample
 
 
-PROFILE = Path("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc")
+try:
+    PROFILE = resolve_cmyk_profile()
+except FileNotFoundError:
+    PROFILE = Path("/nonexistent/print-poc-cmyk-profile.icc")
 
 
 class PreflightPocTest(unittest.TestCase):
