@@ -41,7 +41,9 @@ The rule result is not itself permission to mutate a PDF. The service derives a 
 
 - Uniform solid borders may use `bleed_and_crop`.
 - Complex image edges may use confirmed `edge_pixel_mirror_extend`. The engine samples only the inner edge bands, mirrors them into the configured bleed area, preserves the original Trim Area, and requires visual review.
-- Geometry repair always normalizes from the current explicit TrimBox (or MediaBox when TrimBox is absent). Earlier slug and crop-mark content is clipped away before a new BleedBox and one crop-mark set are produced, preventing cumulative marks.
+- Geometry repair always normalizes from the current explicit TrimBox (or MediaBox when TrimBox is absent). Earlier slug and crop-mark content is clipped away before a new BleedBox and one crop-mark set are produced, preventing cumulative visible marks.
+- Bleed fill or mirrored edge pixels are painted first, finished artwork second, and the replacement crop marks last. Crop marks are vector strokes in a Registration `/All` Separation color space whose DeviceCMYK alternate tint maps to 100% C/M/Y/K. They remain outside BleedBox and are never rasterized into the generated bleed.
+- Ghostscript PDF/X export explicitly preserves Separation spaces so the Registration `/All` marks survive the later document-wide CMYK conversion.
 - Geometry intent comes from the job's immutable Target Geometry, never from a guessed paper name. Compatible PDF pages are proportionally scaled to the confirmed millimetre Trim Size; a ratio difference above 2% disables both geometry and bleed automation instead of stretching artwork.
 - Low effective PPI remains open until the user supplies a replacement image with enough source pixels. Accepted replacements preserve placement, are re-measured and update the rendered derivative preview.
 - A font upload is retained only when its internal name exactly matches the missing PDF font. It is passed to the PDF/X engine through a task-scoped font path; a nonmatching or substitute font still requires explicit consent.

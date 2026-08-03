@@ -116,9 +116,9 @@ class PreflightService:
             {
                 "action": "bleed_and_crop",
                 "label": (
-                    "扩展安全纯色背景并添加裁切标记"
+                    "扩展安全纯色背景并添加四色套印裁切标记"
                     if automatic_bleed
-                    else "镜像延展边缘像素并添加裁切标记"
+                    else "镜像延展边缘像素并添加四色套印裁切标记"
                 ),
                 "applicable": bool(bleed_issues),
                 "executable": bleed_executable,
@@ -136,7 +136,7 @@ class PreflightService:
             },
             {
                 "action": "trim_and_crop_marks",
-                "label": f"按 {target_label} {target_dimensions} 设置成品尺寸与裁切框",
+                "label": f"按 {target_label} {target_dimensions} 设置成品尺寸与四色套印裁切标记",
                 "applicable": trim_missing or bool(geometry_issues),
                 "executable": (trim_missing or geometry_needs_normalization) and not geometry_blocked,
                 "safety": "manual" if geometry_blocked else "confirm",
@@ -164,8 +164,8 @@ class PreflightService:
     @staticmethod
     def _action_summaries(actions: list[str]) -> list[str]:
         labels = {
-            "bleed_and_crop": "已按 TrimBox 在裁切线外生成出血，并仅保留一套位于出血外侧的裁切标记。",
-            "trim_and_crop_marks": "已设置明确裁切框并添加裁切标记；复杂出血仍需人工处理。",
+            "bleed_and_crop": "已先生成出血，再在最上层绘制一套位于 BleedBox 外侧的矢量四色套印裁切标记。",
+            "trim_and_crop_marks": "已设置明确裁切框，并在最上层绘制矢量四色套印裁切标记；复杂出血仍需人工处理。",
             "pdfx_candidate": "已将整份 PDF 的全部页面批量转换为目标 CMYK，并生成 PDF/X-4 候选后重新检查。",
             "replace_image": "已在原版位置替换高分辨率图片并重新计算有效 PPI。",
         }

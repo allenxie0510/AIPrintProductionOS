@@ -1,6 +1,6 @@
 # AI Print Production OS — Project Memory
 
-- Version: 1.2.0-alpha
+- Version: 1.2.1-alpha
 - Status: Public online demo deployment in progress; production hardening active
 - Strategy: PDF first
 - Last updated: 2026-08-03
@@ -67,7 +67,7 @@ Completed:
 - PDF Preflight POC and controlled fixture.
 - UDF 0.1 parser and six core issue categories.
 - Effective PPI verification at 84.67 PPI.
-- Safe solid-color bleed, crop marks and PDF/X-4 candidate path.
+- Safe solid-color bleed, top-painted vector Registration crop marks and PDF/X-4 candidate path.
 - User-confirmed Target Geometry with A/B paper sizes, custom millimetres, target-scale PPI and proportional whole-page normalization.
 - qpdf/Poppler verification and automated tests.
 - Alpha PRD.

@@ -1,7 +1,7 @@
 # 在线 PDF 印前诊断与优化工具 — Alpha PRD
 
 - 产品：AI Print Production OS
-- 文档版本：0.2.0
+- 文档版本：0.2.1
 - 状态：Accepted for Alpha development
 - 日期：2026-08-03
 - 目标周期：6–8 周
@@ -272,6 +272,8 @@ Alpha 支持已确认 TrimBox/BleedBox、裁切标记、均匀纯色背景延展
 
 - 所有修改写入新派生文件，不覆盖源文件。
 - 纯色出血仅在边缘分类满足自动阈值时执行。
+- 裁切标记必须是位于最终内容流最上层的矢量路径，放置在 BleedBox 外侧，并使用 Registration `/All` 分色；其替代色为 C/M/Y/K 各 100%，不得使用普通单黑或位图标记。
+- 后续 CMYK/PDF/X 候选转换必须保留 Registration `/All` 分色与裁切标记的可见性。
 - 所有修复记录输入/输出哈希、规则、引擎和配置。
 
 ### FR-010 低分辨率图片处理（P1）

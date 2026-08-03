@@ -44,7 +44,8 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - bounded edge sampling for a generated 5280 × 7500 pt large-format page.
 - bounded PNG preview rendering and authenticated source/current preview endpoints;
 - confirmation that trim-only repair leaves the insufficient-bleed issue unresolved;
-- exact user sequence `set TrimBox → add image bleed`, proving TrimBox dimensions do not grow, BleedBox is 3 mm on every edge, the earlier marks are clipped, and the final marks remain outside bleed;
+- exact user sequence `set TrimBox → add image bleed`, proving TrimBox dimensions do not grow, BleedBox is 3 mm on every edge, the earlier marks are clipped, and the final marks remain visible outside bleed as top-painted vector strokes;
+- structural verification that crop marks use a Registration `/All` Separation color space with a 100% C/M/Y/K alternate tint, occur after bleed/artwork paint operations, and survive Ghostscript PDF/X conversion;
 - protected image-XObject thumbnail generation plus page, pixel and placed-size evidence;
 - document-wide CMYK conversion provenance (`all_pages`, page count and ICC SHA-256) and post-conversion absence of used RGB evidence.
 - canonical/custom Target Geometry validation and immutable job/report projection;
