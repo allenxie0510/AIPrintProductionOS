@@ -30,8 +30,10 @@ This protects unguessable task URLs but is not an account system. Tenant account
 
 ## Current fix actions
 
-- `bleed_and_crop`: uses automatic solid-color extension for uniform edges or confirmed non-generative edge-pixel mirror extension for complex image edges. It normalizes from TrimBox, writes exactly 3/5 mm according to the preset and produces one crop-mark set outside BleedBox.
-- `trim_and_crop_marks`: adds a slug, explicit TrimBox and crop marks without generating or declaring bleed. This is the honest fallback for complex page borders.
+- `bleed_and_crop`: uses automatic solid-color extension for uniform edges or confirmed non-generative edge-pixel mirror extension for complex image edges. It normalizes from TrimBox, writes exactly 3/5 mm according to the preset and produces one top-painted vector Registration crop-mark set outside BleedBox.
+- `trim_and_crop_marks`: adds a slug, explicit TrimBox and top-painted vector Registration crop marks without generating or declaring bleed. This is the honest fallback for complex page borders.
+
+Both geometry actions report `cropMarksVector=true`, `cropMarksColorSpace=Separation/All` and `cropMarksPaintOrder=topmost`. The `/All` tint transform maps to 100% on every C/M/Y/K process plate and is explicitly preserved by the PDF/X candidate conversion.
 - `pdfx_candidate`: one document-wide ICC conversion across every page plus PDF/X-4 candidate generation. Missing fonts require explicit substitution acknowledgement. It never returns independent PDF/X certification.
 
 `POST /v1/jobs` requires `presetId`, `sizeId`, `trimWidthMm` and `trimHeightMm`. Known A/B paper IDs are validated against canonical dimensions in either orientation; `custom` accepts 10–5000 mm per edge. The immutable `targetGeometry` is returned by the job and copied into preflight policy with per-page observed size, scale and aspect-ratio compatibility.

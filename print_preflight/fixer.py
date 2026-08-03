@@ -12,6 +12,7 @@ import pymupdf
 from PIL import Image, ImageOps
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import NameObject, RectangleObject
+from reportlab.lib.colors import PCMYKColorSep
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
@@ -92,15 +93,40 @@ def supports_pdfx4(executable: str | None = None) -> bool:
     return bool(version and version[:2] >= MIN_GHOSTSCRIPT_PDFX4)
 
 
-def _marks_overlay(width: float, height: float, trim: tuple[float, float, float, float],
-                   bleed_pt: float, rgb: tuple[int, int, int] | None) -> bytes:
+def _solid_bleed_overlay(
+    width: float,
+    height: float,
+    trim: tuple[float, float, float, float],
+    bleed_pt: float,
+    rgb: tuple[int, int, int],
+) -> bytes:
     stream = io.BytesIO()
     c = canvas.Canvas(stream, pagesize=(width, height), pageCompression=1)
     tx0, ty0, tx1, ty1 = trim
-    if rgb is not None:
-        c.setFillColorRGB(*(value / 255.0 for value in rgb))
-        c.rect(tx0 - bleed_pt, ty0 - bleed_pt, (tx1 - tx0) + 2 * bleed_pt,
-               (ty1 - ty0) + 2 * bleed_pt, stroke=0, fill=1)
+    c.setFillColorRGB(*(value / 255.0 for value in rgb))
+    c.rect(
+        tx0 - bleed_pt,
+        ty0 - bleed_pt,
+        (tx1 - tx0) + 2 * bleed_pt,
+        (ty1 - ty0) + 2 * bleed_pt,
+        stroke=0,
+        fill=1,
+    )
+    c.showPage()
+    c.save()
+    return stream.getvalue()
+
+
+def _registration_crop_marks_overlay(
+    width: float,
+    height: float,
+    trim: tuple[float, float, float, float],
+    bleed_pt: float,
+) -> bytes:
+    """Create top-painted vector crop marks in the PDF Registration (/All) colorant."""
+    stream = io.BytesIO()
+    c = canvas.Canvas(stream, pagesize=(width, height), pageCompression=1)
+    tx0, ty0, tx1, ty1 = trim
 
     gap = 1.0
     line_length = 5.0 * PT_PER_MM
@@ -108,7 +134,10 @@ def _marks_overlay(width: float, height: float, trim: tuple[float, float, float,
     bleed_right = tx1 + bleed_pt
     bleed_bottom = ty0 - bleed_pt
     bleed_top = ty1 + bleed_pt
-    c.setStrokeColorCMYK(0, 0, 0, 1)
+    # A professional registration mark must image on every process plate. ReportLab
+    # emits `/Separation /All /DeviceCMYK` and a tint transform of 100% C/M/Y/K.
+    # This is intentionally not ordinary DeviceCMYK rich black.
+    c.setStrokeColor(PCMYKColorSep(100, 100, 100, 100, spotName="All"))
     c.setLineWidth(0.25)
     for x in (tx0, tx1):
         c.line(x, bleed_bottom - gap - line_length, x, bleed_bottom - gap)
@@ -121,14 +150,8 @@ def _marks_overlay(width: float, height: float, trim: tuple[float, float, float,
     return stream.getvalue()
 
 
-def _marks_overlay_page(
-    width: float,
-    height: float,
-    trim: tuple[float, float, float, float],
-    bleed_pt: float,
-    rgb: tuple[int, int, int] | None,
-):
-    page = PdfReader(io.BytesIO(_marks_overlay(width, height, trim, bleed_pt, rgb))).pages[0]
+def _overlay_page(payload: bytes):
+    page = PdfReader(io.BytesIO(payload)).pages[0]
     resources = page.get("/Resources")
     if resources and NameObject("/Font") in resources:
         del resources[NameObject("/Font")]
@@ -243,14 +266,18 @@ def add_trim_and_crop_marks(
         output_width = target_width + 2 * slug_pt
         output_height = target_height + 2 * slug_pt
         trim = (slug_pt, slug_pt, slug_pt + target_width, slug_pt + target_height)
-        overlay_page = _marks_overlay_page(output_width, output_height, trim, 0.0, None)
+        marks_overlay = _overlay_page(
+            _registration_crop_marks_overlay(output_width, output_height, trim, 0.0)
+        )
         output_page = writer.add_blank_page(width=output_width, height=output_height)
-        output_page.merge_page(overlay_page)
         source_page.cropbox = RectangleObject(list(source_trim))
         tx = slug_pt - source_trim[0] * scale_x
         ty = slug_pt - source_trim[1] * scale_y
         page_transform = Transformation(ctm=(scale_x, 0, 0, scale_y, tx, ty))
         output_page.merge_transformed_page(source_page, page_transform, over=True)
+        # Crop marks are vector paths and must be the final paint operation so no
+        # artwork or later geometry content can cover them.
+        output_page.merge_page(marks_overlay, over=True)
         output_page.mediabox = RectangleObject([0, 0, output_width, output_height])
         output_page.cropbox = RectangleObject([0, 0, output_width, output_height])
         output_page.trimbox = RectangleObject(list(trim))
@@ -259,6 +286,9 @@ def add_trim_and_crop_marks(
             "strategy": "trim_and_crop_marks",
             "slugMm": slug_mm,
             "cropMarksAdded": True,
+            "cropMarksVector": True,
+            "cropMarksColorSpace": "Separation/All",
+            "cropMarksPaintOrder": "topmost",
             "bleedGenerated": False,
             "targetWidthMm": round((trim[2] - trim[0]) / PT_PER_MM, 3),
             "targetHeightMm": round((trim[3] - trim[1]) / PT_PER_MM, 3),
@@ -294,7 +324,9 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
         trim = (margin, margin, margin + target_width, margin + target_height)
 
         if strategy == "solid_color_extend":
-            bleed_overlay = _marks_overlay_page(output_width, output_height, trim, bleed_pt, rgb)
+            bleed_overlay = _overlay_page(
+                _solid_bleed_overlay(output_width, output_height, trim, bleed_pt, rgb)
+            )
             applied_strategy = "solid_color_extend"
             safety = "auto"
         else:
@@ -308,7 +340,9 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
             )
             applied_strategy = "edge_pixel_mirror_extend"
             safety = "confirm"
-        marks_overlay = _marks_overlay_page(output_width, output_height, trim, bleed_pt, None)
+        marks_overlay = _overlay_page(
+            _registration_crop_marks_overlay(output_width, output_height, trim, bleed_pt)
+        )
         output_page = writer.add_blank_page(width=output_width, height=output_height)
         output_page.merge_page(bleed_overlay)
         source_page.cropbox = RectangleObject(list(source_trim))
@@ -316,7 +350,10 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
         ty = margin - source_trim[1] * scale_y
         page_transform = Transformation(ctm=(scale_x, 0, 0, scale_y, tx, ty))
         output_page.merge_transformed_page(source_page, page_transform, over=True)
-        output_page.merge_page(marks_overlay)
+        # The bleed layer and artwork are deliberately below one final vector
+        # registration-mark layer. This avoids duplicate or obscured marks when a
+        # user first sets TrimBox and adds bleed in a later repair step.
+        output_page.merge_page(marks_overlay, over=True)
         output_page.mediabox = RectangleObject([0, 0, output_width, output_height])
         output_page.cropbox = RectangleObject([0, 0, output_width, output_height])
         output_page.trimbox = RectangleObject(list(trim))
@@ -335,6 +372,9 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
             "slugMm": slug_mm,
             "cropMarksAdded": True,
             "cropMarksOutsideBleed": True,
+            "cropMarksVector": True,
+            "cropMarksColorSpace": "Separation/All",
+            "cropMarksPaintOrder": "topmost",
             "trimAreaPreserved": True,
             "targetWidthMm": round((trim[2] - trim[0]) / PT_PER_MM, 3),
             "targetHeightMm": round((trim[3] - trim[1]) / PT_PER_MM, 3),
@@ -406,6 +446,7 @@ def export_pdfx4_cmyk(input_pdf: str | Path, output_pdf: str | Path, cmyk_profil
         "-dDownsampleColorImages=false",
         "-dDownsampleGrayImages=false",
         "-dDownsampleMonoImages=false",
+        "-dPreserveSeparation=true",
         "-sColorConversionStrategy=CMYK",
         "-sBlendConversionStrategy=Managed",
         "-sDEVICE=pdfwrite",
