@@ -42,11 +42,21 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument("input")
     analyze.add_argument("--max-pages", type=int, required=True)
 
+    preview = subcommands.add_parser("preview")
+    preview.add_argument("input")
+    preview.add_argument("output")
+    preview.add_argument("--page", type=int, default=1)
+    preview.add_argument("--max-edge", type=int, default=1400)
+
     bleed = subcommands.add_parser("bleed")
     bleed.add_argument("input")
     bleed.add_argument("output")
     bleed.add_argument("analysis")
     bleed.add_argument("--bleed-mm", type=float, required=True)
+
+    trim_crop = subcommands.add_parser("trim-crop")
+    trim_crop.add_argument("input")
+    trim_crop.add_argument("output")
 
     pdfx = subcommands.add_parser("pdfx")
     pdfx.add_argument("input")
@@ -65,6 +75,15 @@ def main() -> int:
             from .analyzer import analyze_pdf
 
             result = analyze_pdf(args.input, max_pages=args.max_pages)
+        elif args.stage == "preview":
+            from .preview import render_pdf_preview
+
+            result = render_pdf_preview(
+                args.input,
+                args.output,
+                page_number=args.page,
+                max_edge=args.max_edge,
+            )
         elif args.stage == "bleed":
             from .fixer import add_bleed_and_crop_marks
 
@@ -75,6 +94,10 @@ def main() -> int:
                 analysis,
                 bleed_mm=args.bleed_mm,
             )
+        elif args.stage == "trim-crop":
+            from .fixer import add_trim_and_crop_marks
+
+            result = add_trim_and_crop_marks(args.input, args.output)
         else:
             from .fixer import export_pdfx4_cmyk
 

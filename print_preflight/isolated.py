@@ -68,6 +68,27 @@ def analyze_pdf_isolated(source: Path, *, max_pages: int) -> dict[str, Any]:
     return _run(["analyze", str(source), "--max-pages", str(max_pages)], source.parent)
 
 
+def render_pdf_preview_isolated(
+    source: Path,
+    output: Path,
+    *,
+    page_number: int = 1,
+    max_edge: int = 1400,
+) -> dict[str, Any]:
+    return _run(
+        [
+            "preview",
+            str(source),
+            str(output),
+            "--page",
+            str(page_number),
+            "--max-edge",
+            str(max_edge),
+        ],
+        output.parent,
+    )
+
+
 def add_bleed_and_crop_marks_isolated(
     source: Path,
     output: Path,
@@ -92,6 +113,10 @@ def add_bleed_and_crop_marks_isolated(
         )
     finally:
         analysis_path.unlink(missing_ok=True)
+
+
+def add_trim_and_crop_marks_isolated(source: Path, output: Path) -> dict[str, Any]:
+    return _run(["trim-crop", str(source), str(output)], output.parent)
 
 
 def export_pdfx4_cmyk_isolated(

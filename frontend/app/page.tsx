@@ -1,6 +1,8 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useMemo, useState } from "react";
+/* eslint-disable @next/next/no-img-element -- authenticated blob previews cannot use the image optimizer */
+
+import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
 
 const DEFAULT_PRODUCTION_API_BASE = "https://ai-print-production-os-api.onrender.com";
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || DEFAULT_PRODUCTION_API_BASE)
@@ -21,7 +23,22 @@ type Report = {
   analysis: { source: { pageCount: number; bytes: number }; pages: unknown[] };
   preflight: { productionScore: number; status: string; issues: Issue[] };
   afterPreflight?: { productionScore: number; status: string; issues: Issue[] };
+  fixPlan: FixAction[];
+  previews?: {
+    source?: { available: boolean; page: number; width?: number; height?: number };
+    current?: { available: boolean; page: number; width?: number; height?: number };
+  };
   validation?: { syntaxPassed: boolean; validator: string; pdfxState: string } | null;
+};
+
+type FixAction = {
+  action: "bleed_and_crop" | "trim_and_crop_marks" | "pdfx_candidate";
+  label: string;
+  applicable: boolean;
+  executable: boolean;
+  safety: "auto" | "confirm" | "manual";
+  reason: string;
+  requiresFontAcknowledgement?: boolean;
 };
 
 type Job = {
@@ -68,6 +85,7 @@ const apiErrorMessages: Record<string, string> = {
   ENGINE_TIMEOUT: "这个 PDF 的处理时间超过在线安全上限。请从设计工具重新导出为优化 PDF 后重试。",
   PDF_COMPLEXITY_LIMIT_EXCEEDED: "这个 PDF 超过当前在线安全复杂度限制。请减少页面、对象或超大图片后重试。",
   ENGINE_PROCESS_FAILED: "PDF 引擎已安全终止，没有影响在线服务。请重新导出 PDF 后重试。",
+  FIX_ACTION_UNSAFE: "所选修复不满足安全执行条件，文件没有被修改。请按修复计划选择可执行动作。",
 };
 
 function apiErrorMessage(error: ApiError | undefined, fallback: string) {
@@ -98,6 +116,26 @@ async function fetchTransient(input: RequestInfo | URL, init?: RequestInit, atte
   throw lastError instanceof Error ? lastError : new Error("在线处理服务暂时不可用。");
 }
 
+function BeforeAfterComparison({ before, after, position, onChange }: {
+  before: string;
+  after: string;
+  position: number;
+  onChange: (position: number) => void;
+}) {
+  return (
+    <div className="preview-card">
+      <div className="preview-heading"><span>修复前</span><span>拖动查看差异</span><span>修复后</span></div>
+      <div className="compare-frame">
+        <img src={before} alt="修复前 PDF 第一页" />
+        <img className="after-image" src={after} alt="修复后 PDF 第一页" style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }} />
+        <div className="compare-divider" style={{ left: `${position}%` }} aria-hidden="true"><span>↔</span></div>
+        <input className="compare-range" type="range" min="0" max="100" value={position} onChange={(event) => onChange(Number(event.target.value))} aria-label="拖动比较修复前后效果" />
+      </div>
+      <p className="preview-note">第一页渲染预览 · 最终交付以下载的 PDF 和复检报告为准</p>
+    </div>
+  );
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [presetId, setPresetId] = useState(presets[0].id);
@@ -106,10 +144,14 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
-  const [bleedFix, setBleedFix] = useState(true);
-  const [pdfxFix, setPdfxFix] = useState(true);
+  const [bleedFix, setBleedFix] = useState(false);
+  const [trimCropFix, setTrimCropFix] = useState(false);
+  const [pdfxFix, setPdfxFix] = useState(false);
   const [fontAck, setFontAck] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [sourcePreviewUrl, setSourcePreviewUrl] = useState("");
+  const [fixedPreviewUrl, setFixedPreviewUrl] = useState("");
+  const [comparePosition, setComparePosition] = useState(50);
 
   const activePreflight = report?.afterPreflight ?? report?.preflight;
   const issues = activePreflight?.issues ?? [];
@@ -117,6 +159,26 @@ export default function Home() {
   const hasBleedIssue = issues.some((item) => item.code === "PAGE.BLEED_INSUFFICIENT");
   const phase = !job ? "upload" : report?.afterPreflight ? "result" : "diagnosis";
   const selectedPreset = useMemo(() => presets.find((item) => item.id === presetId)!, [presetId]);
+  const localPdfUrl = useMemo(() => file ? URL.createObjectURL(file) : "", [file]);
+  const fixPlan = report?.fixPlan ?? [];
+  const bleedAction = fixPlan.find((item) => item.action === "bleed_and_crop");
+  const trimAction = fixPlan.find((item) => item.action === "trim_and_crop_marks");
+  const pdfxAction = fixPlan.find((item) => item.action === "pdfx_candidate");
+
+  useEffect(() => () => { if (localPdfUrl) URL.revokeObjectURL(localPdfUrl); }, [localPdfUrl]);
+  useEffect(() => () => { if (sourcePreviewUrl) URL.revokeObjectURL(sourcePreviewUrl); }, [sourcePreviewUrl]);
+  useEffect(() => () => { if (fixedPreviewUrl) URL.revokeObjectURL(fixedPreviewUrl); }, [fixedPreviewUrl]);
+
+  async function loadPreview(targetJob: Job, stage: "source" | "current") {
+    const response = await fetchTransient(
+      `${API_BASE}/v1/jobs/${targetJob.jobId}/preview?stage=${stage}&page=1`,
+      { headers: { "X-Job-Token": targetJob.accessToken } },
+    );
+    if (!response.ok) return;
+    const url = URL.createObjectURL(await response.blob());
+    if (stage === "source") setSourcePreviewUrl(url);
+    else setFixedPreviewUrl(url);
+  }
 
   function chooseFile(next: File | null) {
     setError("");
@@ -130,6 +192,8 @@ export default function Home() {
       return;
     }
     setFile(next);
+    setSourcePreviewUrl("");
+    setFixedPreviewUrl("");
   }
 
   function onDrop(event: DragEvent<HTMLLabelElement>) {
@@ -180,7 +244,11 @@ export default function Home() {
       if (!createdReport) throw new Error("诊断超时。任务仍会按生命周期自动清理，请稍后重新上传。");
       setJob(created);
       setReport(createdReport);
-      setBleedFix(createdReport.preflight.issues.some((item: Issue) => item.code === "PAGE.BLEED_INSUFFICIENT"));
+      const createdPlan = createdReport.fixPlan ?? [];
+      setBleedFix(Boolean(createdPlan.find((item) => item.action === "bleed_and_crop")?.executable));
+      setTrimCropFix(Boolean(createdPlan.find((item) => item.action === "trim_and_crop_marks")?.executable));
+      setPdfxFix(Boolean(createdPlan.find((item) => item.action === "pdfx_candidate")?.executable));
+      await loadPreview(created, "source");
     } catch (cause) {
       setError(cause instanceof TypeError
         ? "无法连接在线处理服务。Render 可能正在冷启动或恢复，请等待约一分钟后重试。"
@@ -192,7 +260,11 @@ export default function Home() {
 
   async function applyFixes() {
     if (!job) return;
-    const actions = [bleedFix && "bleed_and_crop", pdfxFix && "pdfx_candidate"].filter(Boolean);
+    const actions = [
+      bleedFix && bleedAction?.executable && "bleed_and_crop",
+      trimCropFix && trimAction?.executable && "trim_and_crop_marks",
+      pdfxFix && pdfxAction?.executable && "pdfx_candidate",
+    ].filter(Boolean);
     if (!actions.length) {
       setError("请至少选择一项修复，或保留当前诊断报告。");
       return;
@@ -205,10 +277,11 @@ export default function Home() {
         headers: { "Content-Type": "application/json", "X-Job-Token": job.accessToken },
         body: JSON.stringify({ actions, acknowledgeFontSubstitution: fontAck }),
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "修复执行失败。");
+      const payload = await jsonPayload(response);
+      if (!response.ok) throw new Error(apiErrorMessage(payload.error, "修复执行失败。"));
       setJob((current) => current ? { ...current, ...payload } : current);
-      setReport(payload.report);
+      setReport(payload.report as Report);
+      await Promise.all([loadPreview(job, "source"), loadPreview(job, "current")]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "修复执行失败。");
     } finally {
@@ -255,6 +328,8 @@ export default function Home() {
       setJob(null);
       setReport(null);
       setFile(null);
+      setSourcePreviewUrl("");
+      setFixedPreviewUrl("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "文件删除失败。");
     } finally {
@@ -300,6 +375,11 @@ export default function Home() {
     setError("");
     setFeedbackSent(false);
     setFontAck(false);
+    setBleedFix(false);
+    setTrimCropFix(false);
+    setPdfxFix(false);
+    setSourcePreviewUrl("");
+    setFixedPreviewUrl("");
   }
 
   return (
@@ -314,12 +394,27 @@ export default function Home() {
 
       <section className="hero" id="top">
         <div className="hero-copy">
-          <p className="eyebrow">DESIGNER-FIRST PDF PREFLIGHT</p>
-          <h1>交付印厂之前，<br />先让文件<span>说真话。</span></h1>
-          <p className="lede">在线检查出血、有效分辨率、颜色、字体与 PDF/X 风险。能安全修的自动处理，不能安全修的明确告诉你原因。</p>
-          <div className="promise-row">
-            <span>不伪造 300 PPI</span><span>不静默替换字体</span><span>不永久保存文件</span>
-          </div>
+          {!file ? <>
+            <p className="eyebrow">DESIGNER-FIRST PDF PREFLIGHT</p>
+            <h1>交付印厂之前，<br />先让文件<span>说真话。</span></h1>
+            <p className="lede">在线检查出血、有效分辨率、颜色、字体与 PDF/X 风险。能安全修的自动处理，不能安全修的明确告诉你原因。</p>
+            <div className="promise-row">
+              <span>不伪造 300 PPI</span><span>不静默替换字体</span><span>不永久保存文件</span>
+            </div>
+          </> : report?.afterPreflight && sourcePreviewUrl && fixedPreviewUrl ? (
+            <BeforeAfterComparison before={sourcePreviewUrl} after={fixedPreviewUrl} position={comparePosition} onChange={setComparePosition} />
+          ) : (
+            <div className="preview-card">
+              <div className="preview-heading"><span>{report ? "原始文件" : "待诊断文件"}</span><span>第 1 页</span></div>
+              <div className="pdf-frame">
+                {sourcePreviewUrl
+                  ? <img src={sourcePreviewUrl} alt="上传 PDF 第一页预览" />
+                  : <object data={localPdfUrl} type="application/pdf" aria-label="上传 PDF 预览"><p>浏览器无法显示 PDF 预览。</p></object>}
+                {busy && <div className="preview-processing"><span />正在隔离解析 PDF…</div>}
+              </div>
+              <p className="preview-note">{file.name} · {formatBytes(file.size)}</p>
+            </div>
+          )}
         </div>
 
         <div className="workspace">
@@ -374,8 +469,9 @@ export default function Home() {
               </div>
               <div className="fix-plan">
                 <h3>修复计划</h3>
-                {hasBleedIssue && <label><input type="checkbox" checked={bleedFix} onChange={(event) => setBleedFix(event.target.checked)} /><span><strong>扩展安全背景并添加裁切标记</strong><small>仅当页面边缘分类为均匀纯色时执行</small></span></label>}
-                <label><input type="checkbox" checked={pdfxFix} onChange={(event) => setPdfxFix(event.target.checked)} /><span><strong>生成 CMYK / PDF/X-4 候选</strong><small>使用目标 ICC；独立验证前仍标记为 Candidate</small></span></label>
+                {hasBleedIssue && bleedAction && <label className={!bleedAction.executable ? "unavailable-choice" : ""}><input type="checkbox" disabled={!bleedAction.executable} checked={bleedFix && bleedAction.executable} onChange={(event) => setBleedFix(event.target.checked)} /><span><strong>{bleedAction.label}</strong><small>{bleedAction.reason}</small></span></label>}
+                {trimAction?.applicable && <label><input type="checkbox" checked={trimCropFix} onChange={(event) => setTrimCropFix(event.target.checked)} /><span><strong>{trimAction.label}</strong><small>{trimAction.reason}</small></span></label>}
+                {pdfxAction?.applicable && <label className={!pdfxAction.executable ? "unavailable-choice" : ""}><input type="checkbox" disabled={!pdfxAction.executable} checked={pdfxFix && pdfxAction.executable} onChange={(event) => setPdfxFix(event.target.checked)} /><span><strong>{pdfxAction.label}</strong><small>{pdfxAction.reason}</small></span></label>}
                 {pdfxFix && hasFontIssue && <label className="warning-choice"><input type="checkbox" checked={fontAck} onChange={(event) => setFontAck(event.target.checked)} /><span><strong>我确认本次候选导出可能使用替代字体</strong><small>当前缺少原字体。结果必须放大检查，不会被标记为无风险。</small></span></label>}
               </div>
               <button className="primary" disabled={busy || (pdfxFix && hasFontIssue && !fontAck)} onClick={applyFixes}>{busy ? "正在生成派生文件并复检…" : "执行已确认的修复"}<span>→</span></button>

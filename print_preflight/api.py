@@ -35,7 +35,7 @@ app.add_middleware(
 
 
 class FixRequest(BaseModel):
-    actions: list[Literal["bleed_and_crop", "pdfx_candidate"]] = Field(min_length=1)
+    actions: list[Literal["bleed_and_crop", "trim_and_crop_marks", "pdfx_candidate"]] = Field(min_length=1)
     acknowledgeFontSubstitution: bool = False
 
 
@@ -93,6 +93,26 @@ def get_job(job_id: str, access_token: Annotated[str, Header(alias="X-Job-Token"
 @app.get("/v1/jobs/{job_id}/report")
 def get_report(job_id: str, access_token: Annotated[str, Header(alias="X-Job-Token")]) -> dict:
     return service.report(job_id, access_token)
+
+
+@app.get("/v1/jobs/{job_id}/preview")
+def preview(
+    job_id: str,
+    access_token: Annotated[str, Header(alias="X-Job-Token")],
+    stage: Literal["source", "current"] = "source",
+    page: int = 1,
+) -> FileResponse:
+    output = service.preview_path(
+        job_id,
+        access_token,
+        stage=stage,
+        page_number=page,
+    )
+    return FileResponse(
+        output,
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.post("/v1/jobs/{job_id}/fix")

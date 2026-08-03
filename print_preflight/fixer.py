@@ -34,13 +34,14 @@ def supports_pdfx4(executable: str | None = None) -> bool:
 
 
 def _marks_overlay(width: float, height: float, trim: tuple[float, float, float, float],
-                   bleed_pt: float, rgb: tuple[int, int, int]) -> bytes:
+                   bleed_pt: float, rgb: tuple[int, int, int] | None) -> bytes:
     stream = io.BytesIO()
     c = canvas.Canvas(stream, pagesize=(width, height), pageCompression=1)
     tx0, ty0, tx1, ty1 = trim
-    c.setFillColorRGB(*(value / 255.0 for value in rgb))
-    c.rect(tx0 - bleed_pt, ty0 - bleed_pt, (tx1 - tx0) + 2 * bleed_pt,
-           (ty1 - ty0) + 2 * bleed_pt, stroke=0, fill=1)
+    if rgb is not None:
+        c.setFillColorRGB(*(value / 255.0 for value in rgb))
+        c.rect(tx0 - bleed_pt, ty0 - bleed_pt, (tx1 - tx0) + 2 * bleed_pt,
+               (ty1 - ty0) + 2 * bleed_pt, stroke=0, fill=1)
 
     gap = 1.0
     line_length = 5.0 * PT_PER_MM
@@ -59,6 +60,47 @@ def _marks_overlay(width: float, height: float, trim: tuple[float, float, float,
     c.showPage()
     c.save()
     return stream.getvalue()
+
+
+def add_trim_and_crop_marks(
+    input_pdf: str | Path,
+    output_pdf: str | Path,
+    *,
+    slug_mm: float = 8.0,
+) -> dict[str, Any]:
+    reader = PdfReader(str(input_pdf))
+    writer = PdfWriter()
+    slug_pt = slug_mm * PT_PER_MM
+    page_results = []
+
+    for index, source_page in enumerate(reader.pages):
+        source_width = float(source_page.mediabox.width)
+        source_height = float(source_page.mediabox.height)
+        output_width = source_width + 2 * slug_pt
+        output_height = source_height + 2 * slug_pt
+        trim = (slug_pt, slug_pt, slug_pt + source_width, slug_pt + source_height)
+        overlay_pdf = PdfReader(io.BytesIO(_marks_overlay(output_width, output_height, trim, 0.0, None)))
+        target = writer.add_blank_page(width=output_width, height=output_height)
+        target.merge_page(overlay_pdf.pages[0])
+        tx = slug_pt - float(source_page.mediabox.left)
+        ty = slug_pt - float(source_page.mediabox.bottom)
+        target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
+        target.mediabox = RectangleObject([0, 0, output_width, output_height])
+        target.cropbox = RectangleObject([0, 0, output_width, output_height])
+        target.trimbox = RectangleObject(list(trim))
+        page_results.append({
+            "page": index + 1,
+            "strategy": "trim_and_crop_marks",
+            "slugMm": slug_mm,
+            "cropMarksAdded": True,
+            "bleedGenerated": False,
+        })
+
+    output = Path(output_pdf)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("wb") as handle:
+        writer.write(handle)
+    return {"output": str(output.resolve()), "pages": page_results}
 
 
 def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, analysis: dict[str, Any],
