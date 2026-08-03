@@ -119,10 +119,22 @@ def add_trim_and_crop_marks_isolated(source: Path, output: Path) -> dict[str, An
     return _run(["trim-crop", str(source), str(output)], output.parent)
 
 
+def replace_pdf_image_isolated(source: Path, output: Path, image: Path, xref: int) -> dict[str, Any]:
+    return _run(["replace-image", str(source), str(output), str(image), str(xref)], output.parent)
+
+
+def inspect_font_file_isolated(font: Path) -> dict[str, Any]:
+    return _run(["inspect-font", str(font)], font.parent)
+
+
 def export_pdfx4_cmyk_isolated(
     source: Path,
     output: Path,
     profile: Path,
     work_dir: Path,
+    font_dir: Path | None = None,
 ) -> dict[str, Any]:
-    return _run(["pdfx", str(source), str(output), str(profile), str(work_dir)], work_dir)
+    args = ["pdfx", str(source), str(output), str(profile), str(work_dir)]
+    if font_dir is not None:
+        args.extend(["--font-dir", str(font_dir)])
+    return _run(args, work_dir)

@@ -8,6 +8,7 @@ from pathlib import Path
 import pymupdf
 
 from print_preflight.analyzer import analyze_pdf
+from print_preflight.engine_worker import _parser
 from print_preflight.fixer import (
     add_bleed_and_crop_marks,
     add_trim_and_crop_marks,
@@ -27,6 +28,12 @@ except FileNotFoundError:
 
 
 class PreflightPocTest(unittest.TestCase):
+    def test_pdfx_worker_uses_python_safe_work_dir_destination(self) -> None:
+        arguments = _parser().parse_args([
+            "--result", "result.json", "pdfx", "input.pdf", "output.pdf", "profile.icc", "work",
+        ])
+        self.assertEqual(arguments.work_dir, "work")
+
     def test_large_format_page_uses_bounded_edge_sampling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "large-format.pdf"

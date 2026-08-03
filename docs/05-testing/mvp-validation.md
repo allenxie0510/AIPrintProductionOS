@@ -11,10 +11,10 @@ Upload controlled PDF
   → asynchronous job analysis
   → render token-protected source preview
   → retrieve evidence report
-  → select solid-color bleed/crop repair
+  → execute one diagnosed repair at a time
   → generate immutable derivative
   → re-analyze and qpdf validate
-  → render source/current before-after comparison
+  → render the actual current derivative and optional source/current slider
   → download PDF
   → immediately delete all artifact bytes
 ```
@@ -23,12 +23,18 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 
 ## Automated coverage
 
-### Python — 14 passing tests
+### Python — 19 passing tests
 
 - invalid file and unknown preset rejection;
 - token isolation;
 - report privacy projection;
 - font-substitution confirmation gate;
+- exact staged fonts remove only their own substitution acknowledgement gate;
+- regression coverage for the PDF/X worker `work_dir` argument that previously broke online repair;
+- high-resolution image XObject replacement, insufficient-pixel rejection and post-repair Effective PPI checks;
+- rendered source/current images differ after an actual image replacement;
+- PDF/X quality-regression rejection preserves the previous derivative and job state;
+- invalid font payload rejection;
 - upload/report/fix/download/delete integration;
 - privacy-safe metadata retention after delete;
 - controlled POC analysis and PDF/X generation;
@@ -52,8 +58,10 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - TypeScript/Vinext production build: PASS.
 - ESLint: PASS.
 - server-rendered product smoke test: PASS.
-- responsive upload, diagnosis, fix confirmation and result states implemented.
+- responsive upload, diagnosis, per-issue repair, completion and result states implemented.
 - uploaded PDF preview and repaired-file before/after slider implemented.
+- current derivative preview is shown by default after every completed mutation; comparison is an explicit secondary mode.
+- exact font upload and high-resolution image replacement controls are attached to their diagnosed issue rows.
 - unavailable repair actions are disabled from the server-authored executable plan.
 - transient Render 502/503/504 polling failures retry with bounded exponential backoff and actionable Chinese errors.
 

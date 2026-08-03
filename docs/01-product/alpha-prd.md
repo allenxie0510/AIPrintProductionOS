@@ -535,9 +535,11 @@ Browser / Web UI
 
 ## 19. POC 追溯
 
-已验证：PDF 统一解析、六类问题检测、84.67 Effective PPI、纯色出血、裁切标记、RGB→CMYK/Gray、OutputIntent、PDF/X-4 候选和 qpdf 语法检查。
+已验证：PDF 统一解析、六类问题检测、84.67 Effective PPI、纯色出血、裁切标记、RGB→CMYK/Gray、OutputIntent、PDF/X-4 候选、qpdf 语法检查，以及按 PDF 图片对象原位替换高分辨率原图后重新计算 Effective PPI。
 
-尚未验证：真实图片原位替换、精确字体恢复、复杂出血、独立 PDF/X 合规、真实印厂接受、生产级隔离与临时存储。
+部分验证：原字体 TTF/OTF 上传、签名和内部名称匹配，以及任务级字体路径已实现；精确字体嵌入的许可、字形/字宽身份和视觉回归仍未完成发布验证。
+
+尚未验证：AI 超分、复杂出血、独立 PDF/X 合规、真实印厂接受、生产级隔离与临时存储。
 
 本 PRD 继承 POC 的关键负面结论：低 PPI 不能伪修复；Nimbus Sans 代替 Helvetica 不是安全字体修复；PDF/X 元数据不是合规认证。
 

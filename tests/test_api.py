@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import io
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pymupdf
+from PIL import Image, ImageChops
 
 import print_preflight.api as api_module
 from print_preflight.service import PreflightService
@@ -77,6 +82,10 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         fixed = fix_response.json()
         self.assertTrue(fixed["downloadAvailable"])
         self.assertEqual(fixed["report"]["validation"]["syntaxPassed"], True)
+        self.assertIn(
+            "IMAGE.LOW_EFFECTIVE_DPI",
+            {item["code"] for item in fixed["report"]["afterPreflight"]["issues"]},
+        )
 
         current_preview = await self.client.get(
             f"/v1/jobs/{created['jobId']}/preview?stage=current&page=1",
@@ -126,6 +135,14 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
             else "FIX_ACTION_UNSAFE"
         )
         self.assertEqual(response.json()["error"]["code"], expected)
+        if pdfx_action["executable"]:
+            accepted = await self.client.post(
+                f"/v1/jobs/{created['jobId']}/fix",
+                headers=headers,
+                json={"actions": ["pdfx_candidate"], "acknowledgeFontSubstitution": True},
+            )
+            self.assertEqual(accepted.status_code, 200, accepted.text)
+            self.assertNotIn("work_dir", accepted.text)
 
     async def test_complex_border_rejects_bleed_but_allows_honest_trim_repair(self) -> None:
         source = Path(self.temporary.name) / "complex-border.pdf"
@@ -168,8 +185,143 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         after_codes = {item["code"] for item in repaired.json()["report"]["afterPreflight"]["issues"]}
         self.assertNotIn("PAGE.TRIMBOX_MISSING", after_codes)
         self.assertIn("PAGE.BLEED_INSUFFICIENT", after_codes)
+        self.assertNotIn("FONT.NOT_EMBEDDED", after_codes)
+        resolved_codes = {
+            item["code"]
+            for item in repaired.json()["report"]["fix"]["resolvedIssues"]
+        }
+        self.assertEqual(resolved_codes, {"PAGE.TRIMBOX_MISSING"})
         after_plan = {item["action"]: item for item in repaired.json()["report"]["fixPlan"]}
         self.assertFalse(after_plan["trim_and_crop_marks"]["executable"])
+
+    async def test_low_resolution_image_can_be_replaced_in_place(self) -> None:
+        created = await self._upload()
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        issue = next(item for item in report["preflight"]["issues"] if item["code"] == "IMAGE.LOW_EFFECTIVE_DPI")
+        xref = issue["evidence"]["xref"]
+        source_preview = await self.client.get(
+            f"/v1/jobs/{created['jobId']}/preview?stage=source&page=1",
+            headers=headers,
+        )
+        replacement = Path(self.temporary.name) / "replacement.png"
+        Image.new("RGB", (2400, 1600), (30, 140, 210)).save(replacement)
+
+        response = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/assets/image-replacement",
+            headers=headers,
+            files={"file": ("replacement.png", replacement.read_bytes(), "image/png")},
+            data={"xref": str(xref)},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        remaining = response.json()["report"]["afterPreflight"]["issues"]
+        self.assertFalse(
+            any(item["code"] == "IMAGE.LOW_EFFECTIVE_DPI" and item["evidence"]["xref"] == xref for item in remaining)
+        )
+        self.assertIn("已在原版位置替换高分辨率图片", response.json()["report"]["fix"]["summary"][0])
+        current_preview = await self.client.get(
+            f"/v1/jobs/{created['jobId']}/preview?stage=current&page=1",
+            headers=headers,
+        )
+        before = Image.open(io.BytesIO(source_preview.content)).convert("RGB")
+        after = Image.open(io.BytesIO(current_preview.content)).convert("RGB")
+        self.assertEqual(before.size, after.size)
+        self.assertIsNotNone(ImageChops.difference(before, after).getbbox())
+
+    async def test_exact_provided_fonts_remove_substitution_acknowledgement_gate(self) -> None:
+        created = await self._upload()
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        font_names = [
+            item["name"]
+            for item in report["analysis"]["document"]["fonts"]
+            if not item["embedded"]
+        ]
+        self.assertTrue(font_names)
+        report["providedFonts"] = [
+            {"expectedName": name, "fontName": name, "ready": True}
+            for name in font_names
+        ]
+        api_module.service.store.update(created["jobId"], report_json=report)
+        source = Path(api_module.service.store.get_job(created["jobId"])["source_path"])
+        (source.parent / "fonts").mkdir()
+
+        def fake_export(input_pdf, output_pdf, _profile, _work_dir, *, font_dir=None):
+            self.assertIsNotNone(font_dir)
+            shutil.copy2(input_pdf, output_pdf)
+            return {"output": str(output_pdf), "strategy": "test-exact-font-path"}
+
+        with (
+            patch("print_preflight.service.supports_pdfx4", return_value=True),
+            patch("print_preflight.service.resolve_cmyk_profile", return_value=source),
+            patch("print_preflight.service.export_pdfx4_cmyk_isolated", side_effect=fake_export),
+        ):
+            response = await self.client.post(
+                f"/v1/jobs/{created['jobId']}/fix",
+                headers=headers,
+                json={"actions": ["pdfx_candidate"], "acknowledgeFontSubstitution": False},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_pdfx_quality_regression_preserves_previous_file(self) -> None:
+        created = await self._upload()
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        source = Path(api_module.service.store.get_job(created["jobId"])["source_path"])
+        regressed = copy.deepcopy(report["analysis"])
+        added = copy.deepcopy(regressed["document"]["images"][0])
+        added["xref"] = 999999
+        added["placementIndex"] = 999
+        added["effectiveDpiX"] = 1.0
+        added["effectiveDpiY"] = 1.0
+        added["minEffectiveDpi"] = 1.0
+        regressed["document"]["images"].append(added)
+
+        def fake_export(input_pdf, output_pdf, _profile, _work_dir, *, font_dir=None):
+            shutil.copy2(input_pdf, output_pdf)
+            return {"output": str(output_pdf), "strategy": "test-regression"}
+
+        with (
+            patch("print_preflight.service.supports_pdfx4", return_value=True),
+            patch("print_preflight.service.resolve_cmyk_profile", return_value=source),
+            patch("print_preflight.service.export_pdfx4_cmyk_isolated", side_effect=fake_export),
+            patch("print_preflight.service.analyze_pdf_isolated", return_value=regressed),
+        ):
+            response = await self.client.post(
+                f"/v1/jobs/{created['jobId']}/fix",
+                headers=headers,
+                json={"actions": ["pdfx_candidate"], "acknowledgeFontSubstitution": True},
+            )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "FIX_QUALITY_REGRESSION")
+        current = (await self.client.get(f"/v1/jobs/{created['jobId']}", headers=headers)).json()
+        self.assertEqual(current["status"], "awaiting_decision")
+        self.assertFalse(current["downloadAvailable"])
+
+    async def test_small_replacement_and_invalid_font_are_rejected(self) -> None:
+        created = await self._upload()
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        image_issue = next(item for item in report["preflight"]["issues"] if item["code"] == "IMAGE.LOW_EFFECTIVE_DPI")
+        tiny = Path(self.temporary.name) / "tiny.png"
+        Image.new("RGB", (100, 100), (255, 255, 255)).save(tiny)
+        too_small = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/assets/image-replacement",
+            headers=headers,
+            files={"file": ("tiny.png", tiny.read_bytes(), "image/png")},
+            data={"xref": str(image_issue["evidence"]["xref"])},
+        )
+        self.assertEqual(too_small.status_code, 422, too_small.text)
+        self.assertEqual(too_small.json()["error"]["code"], "REPLACEMENT_IMAGE_TOO_SMALL")
+
+        font_issue = next(item for item in report["preflight"]["issues"] if item["code"] == "FONT.NOT_EMBEDDED")
+        invalid_font = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/assets/font",
+            headers=headers,
+            files={"file": ("font.ttf", b"not a font", "font/ttf")},
+            data={"expectedName": font_issue["message"].split(": ", 1)[1]},
+        )
+        self.assertEqual(invalid_font.status_code, 422, invalid_font.text)
 
     async def test_invalid_file_and_unknown_preset_are_rejected(self) -> None:
         invalid = await self.client.post(

@@ -58,11 +58,21 @@ def _parser() -> argparse.ArgumentParser:
     trim_crop.add_argument("input")
     trim_crop.add_argument("output")
 
+    replace_image = subcommands.add_parser("replace-image")
+    replace_image.add_argument("input")
+    replace_image.add_argument("output")
+    replace_image.add_argument("image")
+    replace_image.add_argument("xref", type=int)
+
+    inspect_font = subcommands.add_parser("inspect-font")
+    inspect_font.add_argument("font")
+
     pdfx = subcommands.add_parser("pdfx")
     pdfx.add_argument("input")
     pdfx.add_argument("output")
     pdfx.add_argument("profile")
-    pdfx.add_argument("work-dir")
+    pdfx.add_argument("work_dir")
+    pdfx.add_argument("--font-dir")
     return parser
 
 
@@ -98,10 +108,26 @@ def main() -> int:
             from .fixer import add_trim_and_crop_marks
 
             result = add_trim_and_crop_marks(args.input, args.output)
-        else:
+        elif args.stage == "replace-image":
+            from .fixer import replace_pdf_image
+
+            result = replace_pdf_image(args.input, args.output, args.image, args.xref)
+        elif args.stage == "inspect-font":
+            from .fixer import inspect_font_file
+
+            result = inspect_font_file(args.font)
+        elif args.stage == "pdfx":
             from .fixer import export_pdfx4_cmyk
 
-            result = export_pdfx4_cmyk(args.input, args.output, args.profile, args.work_dir)
+            result = export_pdfx4_cmyk(
+                args.input,
+                args.output,
+                args.profile,
+                args.work_dir,
+                font_dir=args.font_dir,
+            )
+        else:
+            raise ValueError(f"Unknown engine stage: {args.stage}")
         _write_envelope(result_path, result=result)
         return 0
     except MemoryError:
