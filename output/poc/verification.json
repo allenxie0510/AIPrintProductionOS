@@ -1,0 +1,104 @@
+{
+  "versions": {
+    "pymupdf": "1.26.3",
+    "ghostscript": "10.07.1",
+    "qpdf": "qpdf version 12.3.2"
+  },
+  "inputAssertions": {
+    "expectedIssuesFound": true,
+    "expectedIssueCodes": [
+      "COLOR.RGB_USED",
+      "FONT.NOT_EMBEDDED",
+      "IMAGE.LOW_EFFECTIVE_DPI",
+      "PAGE.BLEED_INSUFFICIENT",
+      "PAGE.TRIMBOX_MISSING",
+      "PDFX.NOT_DECLARED"
+    ],
+    "actualIssueCodes": [
+      "COLOR.RGB_USED",
+      "FONT.NOT_EMBEDDED",
+      "IMAGE.LOW_EFFECTIVE_DPI",
+      "PAGE.BLEED_INSUFFICIENT",
+      "PAGE.TRIMBOX_MISSING",
+      "PDFX.NOT_DECLARED"
+    ],
+    "effectiveImageDpi": 84.67
+  },
+  "outputAssertions": {
+    "qpdfSyntaxCheckPassed": true,
+    "qpdfOutput": "checking output/pdf/poc-fixed-pdfx4.pdf\nPDF Version: 1.6\nFile is not encrypted\nFile is not linearized\nNo syntax or stream encoding errors found; the file may still contain\nerrors that qpdf cannot detect",
+    "trimBoxExplicit": true,
+    "bleedBoxExplicit": true,
+    "minimumBleedMm": 3.0,
+    "allFontsEmbedded": true,
+    "usedColorSpaces": [
+      "DeviceCMYK",
+      "DeviceGray"
+    ],
+    "rgbIssueCleared": true,
+    "pdfxDeclared": "PDF/X-4",
+    "outputIntentPresent": true,
+    "remainingIssueCodes": [
+      "IMAGE.LOW_EFFECTIVE_DPI"
+    ]
+  },
+  "visualComparison": {
+    "comparedSizePx": [
+      1241,
+      1754
+    ],
+    "meanAbsoluteChannelDelta": 4.845,
+    "maxChannelDelta": 229
+  },
+  "fixEvidence": {
+    "boxFix": {
+      "output": "tmp/pdfs/poc-box-fixed.pdf",
+      "pages": [
+        {
+          "page": 1,
+          "strategy": "solid_color_extend",
+          "sampledRgb": [
+            20,
+            91,
+            158
+          ],
+          "bleedMm": 3.0,
+          "slugMm": 8.0,
+          "cropMarksAdded": true
+        }
+      ]
+    },
+    "pdfxFix": {
+      "output": "output/pdf/poc-fixed-pdfx4.pdf",
+      "command": [
+        "/opt/homebrew/bin/gs",
+        "-dSAFER",
+        "-dBATCH",
+        "-dNOPAUSE",
+        "-dPDFX=4",
+        "-dCompatibilityLevel=1.6",
+        "-dPDFACompatibilityPolicy=2",
+        "-dAutoRotatePages=/None",
+        "-dEmbedAllFonts=true",
+        "-dEmbedSubstituteFonts=true",
+        "-dSubsetFonts=true",
+        "-dDetectDuplicateImages=true",
+        "-sColorConversionStrategy=CMYK",
+        "-sBlendConversionStrategy=Managed",
+        "-sDEVICE=pdfwrite",
+        "-sOutputICCProfile=/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc",
+        "--permit-file-read=/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc",
+        "-sOutputFile=output/pdf/poc-fixed-pdfx4.pdf",
+        "tmp/pdfs/PDFX4_poc_def.ps",
+        "tmp/pdfs/poc-box-fixed.pdf"
+      ],
+      "stdout": "GPL Ghostscript 10.07.1 (2026-05-19)\nCopyright (C) 2026 Artifex Software, Inc.  All rights reserved.\nThis software is supplied under the GNU AGPLv3 and comes with NO WARRANTY:\nsee the file COPYING for details.\nProcessing pages 1 through 1.\nPage 1\nLoading font Helvetica (or substitute) from /opt/homebrew/Cellar/ghostscript/10.07.1/share/ghostscript/Resource/Font/NimbusSans-Regular\nLoading font Helvetica (or substitute) from /opt/homebrew/Cellar/ghostscript/10.07.1/share/ghostscript/Resource/Font/NimbusSans-Regular\nLoading font Helvetica-Bold (or substitute) from /opt/homebrew/Cellar/ghostscript/10.07.1/share/ghostscript/Resource/Font/NimbusSans-Bold\n",
+      "stderr": "",
+      "profile": "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc",
+      "warning": "PDF/X declaration is a candidate until independently validated against the target print condition."
+    }
+  },
+  "elapsedSeconds": 0.673,
+  "result": "PASS",
+  "importantBoundary": "Low image DPI intentionally remains unresolved; metadata or resampling alone cannot restore source detail."
+}

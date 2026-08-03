@@ -1,0 +1,121 @@
+name: PDF Preflight MVP
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install PDF system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript qpdf poppler-utils icc-profiles-free
+
+      - name: Select POC CMYK profile
+        run: |
+          profile=$(find /usr/share/color/icc -type f \( -iname '*cmyk*.icc' -o -iname '*coated*.icc' \) | head -n 1)
+          test -n "$profile"
+          echo "PRINT_POC_CMYK_PROFILE=$profile" >> "$GITHUB_ENV"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate designer web app
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm test
+
+      - name: Detect PDF/X-4 generation support
+        id: ghostscript
+        run: |
+          if python -c 'from print_preflight.fixer import supports_pdfx4; raise SystemExit(0 if supports_pdfx4() else 1)'; then
+            echo "pdfx4=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pdfx4=false" >> "$GITHUB_OUTPUT"
+            echo "Ghostscript is older than 10.07; validating the checked-in 10.07-generated artifact instead."
+          fi
+
+      - name: Run end-to-end PDF/X-4 POC
+        if: steps.ghostscript.outputs.pdfx4 == 'true'
+        run: python scripts/run_poc.py
+
+      - name: Validate PDF/X-4 candidate
+        run: |
+          qpdf --check output/pdf/poc-fixed-pdfx4.pdf
+          pdfinfo -box output/pdf/poc-fixed-pdfx4.pdf
+          pdftoppm -f 1 -singlefile -r 144 -png output/pdf/poc-fixed-pdfx4.pdf output/poc/rendered/final-poppler
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-preflight-poc-evidence
+          path: |
+            output/poc/*.json
+            output/poc/rendered/final-poppler.png
+            output/pdf/poc-fixed-pdfx4.pdf
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production demo image
+        run: docker build --tag ai-print-production-os:ci .
+
+      - name: Start API container
+        run: docker run --detach --name printready-ci --publish 10000:10000 ai-print-production-os:ci
+
+      - name: Verify runtime and health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:10000/health; then
+              break
+            fi
+            if [ "$attempt" = 30 ]; then
+              docker logs printready-ci
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:10000/v1/presets > /tmp/presets.json
+          test "$(jq '.presets | length' /tmp/presets.json)" -ge 3
+          docker exec printready-ci python -c 'from print_preflight.fixer import supports_pdfx4; from print_preflight.profiles import resolve_cmyk_profile; assert supports_pdfx4(); assert resolve_cmyk_profile().is_file()'
+
+      - name: Show container logs
+        if: always()
+        run: docker logs printready-ci || true
+
+      - name: Stop API container
+        if: always()
+        run: docker rm --force printready-ci || true

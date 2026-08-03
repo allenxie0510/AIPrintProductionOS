@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ai-print-production-os-api
+    runtime: docker
+    region: singapore
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PRINT_MVP_DATA_DIR
+        value: /var/lib/printready
+      - key: PRINT_MVP_CORS_ORIGINS
+        value: "*"
+      - key: PRINT_MVP_MAX_UPLOAD_BYTES
+        value: "104857600"
+      - key: PRINT_MVP_MAX_PAGES
+        value: "20"
+      - key: PRINT_MVP_FILE_TTL_SECONDS
+        value: "86400"
+      - key: PRINT_POC_CMYK_PROFILE
+        value: /usr/local/share/ghostscript/iccprofiles/default_cmyk.icc

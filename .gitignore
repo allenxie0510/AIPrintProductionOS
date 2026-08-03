@@ -4,5 +4,6 @@ __pycache__/
 tmp/pdfs/*.pdf
 tmp/pdfs/*.png
 tmp/pdfs/*.ps
-output/poc/rendered/
-
+output/poc/rendered/*
+!output/poc/rendered/final-poppler.png
+var/
