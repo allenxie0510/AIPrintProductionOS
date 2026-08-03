@@ -58,6 +58,16 @@ POC presets are explicitly marked `poc-only`; they are not print-provider recomm
 
 Parser output contains observations and source evidence only. It never embeds a production verdict. Source paths are worker-local and must be removed from persisted/report projections.
 
+### 3.2.1 Target Geometry
+
+PDF MediaBox/TrimBox dimensions are observations, not sufficient evidence of design intent. Every new Web job carries a user-confirmed immutable Target Geometry containing a standard/custom size ID, finished width and height in millimetres, source and contract version.
+
+- Product/Print Preset controls PPI, bleed, color and PDF/X policy.
+- Target Geometry independently controls finished Trim Size and the physical scale used for placed-image PPI.
+- If PDF and target aspect ratios differ by no more than 2%, the service may offer confirmed whole-page proportional normalization.
+- If the ratio exceeds that tolerance, geometry and bleed repair are `manual`; the engine never applies non-proportional stretching.
+- Parser UDF remains unchanged. Rule policy records the target plus per-page observed size, scale and compatibility so production intent never contaminates parser observations.
+
 ### 3.3 RuleSet and RuleExecution
 
 Every run emits:

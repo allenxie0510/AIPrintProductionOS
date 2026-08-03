@@ -16,7 +16,7 @@ This protects unguessable task URLs but is not an account system. Tenant account
 |---|---|---|
 | `GET` | `/health` | Service health |
 | `GET` | `/v1/presets` | Versioned POC Print Presets |
-| `POST` | `/v1/jobs` | Stream a PDF into an ephemeral job and enqueue analysis |
+| `POST` | `/v1/jobs` | Stream a PDF into an ephemeral job, bind Print Preset plus confirmed Trim Size and enqueue analysis |
 | `GET` | `/v1/jobs/{jobId}` | Job state, score and expiry |
 | `GET` | `/v1/jobs/{jobId}/report` | Evidence, issues and validation report |
 | `GET` | `/v1/jobs/{jobId}/preview?stage=source|current&page=1` | Token-protected, no-store PNG preview |
@@ -33,6 +33,10 @@ This protects unguessable task URLs but is not an account system. Tenant account
 - `bleed_and_crop`: uses automatic solid-color extension for uniform edges or confirmed non-generative edge-pixel mirror extension for complex image edges. It normalizes from TrimBox, writes exactly 3/5 mm according to the preset and produces one crop-mark set outside BleedBox.
 - `trim_and_crop_marks`: adds a slug, explicit TrimBox and crop marks without generating or declaring bleed. This is the honest fallback for complex page borders.
 - `pdfx_candidate`: one document-wide ICC conversion across every page plus PDF/X-4 candidate generation. Missing fonts require explicit substitution acknowledgement. It never returns independent PDF/X certification.
+
+`POST /v1/jobs` requires `presetId`, `sizeId`, `trimWidthMm` and `trimHeightMm`. Known A/B paper IDs are validated against canonical dimensions in either orientation; `custom` accepts 10–5000 mm per edge. The immutable `targetGeometry` is returned by the job and copied into preflight policy with per-page observed size, scale and aspect-ratio compatibility.
+
+`PAGE.TARGET_SIZE_MISMATCH` is repairable only when observed and target aspect ratios differ by at most 2%. The existing `trim_and_crop_marks` action then proportionally normalizes the complete page to the confirmed Trim Size. A larger ratio mismatch makes geometry and bleed actions non-executable.
 
 `image-replacement` accepts `xref` plus PNG/JPEG/TIFF/WebP multipart data. The service calculates minimum pixel dimensions from every current placement and the active Print Preset, rejects undersized assets, preserves layout, then re-analyzes effective PPI.
 

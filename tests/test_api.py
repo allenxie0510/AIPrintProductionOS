@@ -31,14 +31,26 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         await self.client.aclose()
         self.temporary.cleanup()
 
-    async def _upload(self, source: Path | None = None) -> dict:
+    async def _upload(
+        self,
+        source: Path | None = None,
+        *,
+        size_id: str = "a4",
+        width_mm: float = 210.0,
+        height_mm: float = 297.0,
+    ) -> dict:
         if source is None:
             source = Path(self.temporary.name) / "fixture.pdf"
             make_sample(source)
         response = await self.client.post(
             "/v1/jobs",
             files={"file": ("fixture.pdf", source.read_bytes(), "application/pdf")},
-            data={"presetId": "designer-standard-poc"},
+            data={
+                "presetId": "designer-standard-poc",
+                "sizeId": size_id,
+                "trimWidthMm": str(width_mm),
+                "trimHeightMm": str(height_mm),
+            },
         )
         self.assertEqual(response.status_code, 202, response.text)
         created = response.json()
@@ -161,7 +173,12 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
                 page.draw_rect(rectangle, color=color, fill=color)
             document.save(source)
 
-        created = await self._upload(source)
+        created = await self._upload(
+            source,
+            size_id="custom",
+            width_mm=300 * 25.4 / 72,
+            height_mm=420 * 25.4 / 72,
+        )
         headers = {"X-Job-Token": created["accessToken"]}
         report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
         plan = {item["action"]: item for item in report["fixPlan"]}
@@ -297,6 +314,8 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         added = copy.deepcopy(regressed["document"]["images"][0])
         added["xref"] = 999999
         added["placementIndex"] = 999
+        added["pixelWidth"] = 6
+        added["pixelHeight"] = 4
         added["effectiveDpiX"] = 1.0
         added["effectiveDpiY"] = 1.0
         added["minEffectiveDpi"] = 1.0
@@ -352,18 +371,88 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         invalid = await self.client.post(
             "/v1/jobs",
             files={"file": ("not.pdf", b"not a pdf", "application/pdf")},
-            data={"presetId": "designer-standard-poc"},
+            data={
+                "presetId": "designer-standard-poc",
+                "sizeId": "a4",
+                "trimWidthMm": "210",
+                "trimHeightMm": "297",
+            },
         )
         self.assertEqual(invalid.status_code, 415)
 
         source = Path(self.temporary.name) / "fixture.pdf"
         make_sample(source)
+        missing_size = await self.client.post(
+            "/v1/jobs",
+            files={"file": ("fixture.pdf", source.read_bytes(), "application/pdf")},
+            data={"presetId": "designer-standard-poc"},
+        )
+        self.assertEqual(missing_size.status_code, 422)
+
         unknown = await self.client.post(
             "/v1/jobs",
             files={"file": ("fixture.pdf", source.read_bytes(), "application/pdf")},
-            data={"presetId": "unknown"},
+            data={
+                "presetId": "unknown",
+                "sizeId": "a4",
+                "trimWidthMm": "210",
+                "trimHeightMm": "297",
+            },
         )
         self.assertEqual(unknown.status_code, 422)
+
+        invalid_size = await self.client.post(
+            "/v1/jobs",
+            files={"file": ("fixture.pdf", source.read_bytes(), "application/pdf")},
+            data={
+                "presetId": "designer-standard-poc",
+                "sizeId": "b5-iso",
+                "trimWidthMm": "210",
+                "trimHeightMm": "297",
+            },
+        )
+        self.assertEqual(invalid_size.status_code, 422)
+        self.assertEqual(invalid_size.json()["error"]["code"], "TARGET_TRIM_SIZE_INVALID")
+
+    async def test_confirmed_a4_size_normalizes_figma_point_canvas(self) -> None:
+        source = Path(self.temporary.name) / "figma-a4-ratio.pdf"
+        with pymupdf.open() as document:
+            page = document.new_page(width=794, height=1123)
+            page.draw_rect(page.rect, color=(0.1, 0.4, 0.7), fill=(0.1, 0.4, 0.7))
+            document.save(source)
+
+        created = await self._upload(source, size_id="a4", width_mm=210, height_mm=297)
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        size_issue = next(
+            item for item in report["preflight"]["issues"]
+            if item["code"] == "PAGE.TARGET_SIZE_MISMATCH"
+        )
+        self.assertEqual(size_issue["fix"]["safety"], "confirm")
+        self.assertTrue(size_issue["evidence"]["aspectRatioCompatible"])
+        self.assertEqual(report["preflight"]["policy"]["targetGeometry"]["sizeId"], "a4")
+
+        repaired = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/fix",
+            headers=headers,
+            json={"actions": ["trim_and_crop_marks"], "acknowledgeFontSubstitution": False},
+        )
+        self.assertEqual(repaired.status_code, 200, repaired.text)
+        after_codes = {item["code"] for item in repaired.json()["report"]["afterPreflight"]["issues"]}
+        self.assertNotIn("PAGE.TARGET_SIZE_MISMATCH", after_codes)
+        job_record = api_module.service.store.get_job(created["jobId"])
+        with pymupdf.open(job_record["output_path"]) as document:
+            self.assertAlmostEqual(document[0].trimbox.width * 25.4 / 72, 210, places=2)
+            self.assertAlmostEqual(document[0].trimbox.height * 25.4 / 72, 297, places=2)
+            trim = document[0].trimbox
+            center = pymupdf.Rect(
+                trim.x0 + trim.width / 2 - 1,
+                trim.y0 + trim.height / 2 - 1,
+                trim.x0 + trim.width / 2 + 1,
+                trim.y0 + trim.height / 2 + 1,
+            )
+            pixel = document[0].get_pixmap(clip=center, alpha=False)
+            self.assertNotEqual(tuple(pixel.samples[:3]), (255, 255, 255))
 
 
 if __name__ == "__main__":

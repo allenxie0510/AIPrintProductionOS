@@ -33,6 +33,8 @@ test("renders the designer PDF preflight product", async () => {
   assert.match(html, /PrintReady/);
   assert.match(html, /交付印厂之前/);
   assert.match(html, /开始印前诊断/);
+  assert.match(html, /目标成品尺寸（裁切后）/);
+  assert.match(html, /不根据 Figma px 静默猜测/);
   assert.match(html, /不伪造 300 PPI/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });

@@ -13,6 +13,7 @@ Status: Alpha MVP
 | Fix | Class | Evidence |
 |---|---|---|
 | Add explicit TrimBox, slug and crop marks without claiming bleed | confirm | Implemented |
+| Normalize whole page to user-confirmed finished Trim Size | confirm/manual | Implemented for compatible aspect ratios; incompatible ratios remain manual |
 | Solid-color 3 mm bleed extension | auto | Implemented with border classifier |
 | RGB -> target CMYK | confirm | Implemented with POC profile |
 | Upload and validate exact font input | confirm | TTF/OTF signature and internal font name validated in isolated worker |
@@ -41,6 +42,7 @@ The rule result is not itself permission to mutate a PDF. The service derives a 
 - Uniform solid borders may use `bleed_and_crop`.
 - Complex image edges may use confirmed `edge_pixel_mirror_extend`. The engine samples only the inner edge bands, mirrors them into the configured bleed area, preserves the original Trim Area, and requires visual review.
 - Geometry repair always normalizes from the current explicit TrimBox (or MediaBox when TrimBox is absent). Earlier slug and crop-mark content is clipped away before a new BleedBox and one crop-mark set are produced, preventing cumulative marks.
+- Geometry intent comes from the job's immutable Target Geometry, never from a guessed paper name. Compatible PDF pages are proportionally scaled to the confirmed millimetre Trim Size; a ratio difference above 2% disables both geometry and bleed automation instead of stretching artwork.
 - Low effective PPI remains open until the user supplies a replacement image with enough source pixels. Accepted replacements preserve placement, are re-measured and update the rendered derivative preview.
 - A font upload is retained only when its internal name exactly matches the missing PDF font. It is passed to the PDF/X engine through a task-scoped font path; a nonmatching or substitute font still requires explicit consent.
 - Each repair starts from the current immutable derivative, writes a new intermediate file, re-analyzes the result and updates the repair history.

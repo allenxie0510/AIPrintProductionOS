@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .geometry import TargetGeometry
+
 
 ENGINE_TIMEOUT_SECONDS = int(os.environ.get("PRINT_MVP_ENGINE_TIMEOUT_SECONDS", "120"))
 
@@ -115,6 +117,7 @@ def add_bleed_and_crop_marks_isolated(
     analysis: dict[str, Any],
     *,
     bleed_mm: float,
+    target: TargetGeometry | None = None,
 ) -> dict[str, Any]:
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -127,16 +130,24 @@ def add_bleed_and_crop_marks_isolated(
         json.dump(analysis, handle, ensure_ascii=False)
         analysis_path = Path(handle.name)
     try:
-        return _run(
-            ["bleed", str(source), str(output), str(analysis_path), "--bleed-mm", str(bleed_mm)],
-            output.parent,
-        )
+        args = ["bleed", str(source), str(output), str(analysis_path), "--bleed-mm", str(bleed_mm)]
+        if target is not None:
+            args.extend(["--target-json", json.dumps(target.to_dict(), ensure_ascii=False)])
+        return _run(args, output.parent)
     finally:
         analysis_path.unlink(missing_ok=True)
 
 
-def add_trim_and_crop_marks_isolated(source: Path, output: Path) -> dict[str, Any]:
-    return _run(["trim-crop", str(source), str(output)], output.parent)
+def add_trim_and_crop_marks_isolated(
+    source: Path,
+    output: Path,
+    *,
+    target: TargetGeometry | None = None,
+) -> dict[str, Any]:
+    args = ["trim-crop", str(source), str(output)]
+    if target is not None:
+        args.extend(["--target-json", json.dumps(target.to_dict(), ensure_ascii=False)])
+    return _run(args, output.parent)
 
 
 def replace_pdf_image_isolated(source: Path, output: Path, image: Path, xref: int) -> dict[str, Any]:

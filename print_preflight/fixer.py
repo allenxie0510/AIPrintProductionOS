@@ -15,6 +15,7 @@ from pypdf.generic import NameObject, RectangleObject
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
+from .geometry import ASPECT_RATIO_TOLERANCE, TargetGeometry
 from .units import PT_PER_MM
 
 
@@ -139,6 +140,24 @@ def _explicit_trim_or_media(page: Any) -> tuple[float, float, float, float]:
     return (float(box.left), float(box.bottom), float(box.right), float(box.top))
 
 
+def _target_page_geometry(
+    source_trim: tuple[float, float, float, float],
+    target: TargetGeometry | None,
+) -> tuple[float, float, float, float]:
+    source_width = source_trim[2] - source_trim[0]
+    source_height = source_trim[3] - source_trim[1]
+    target_width = target.width_mm * PT_PER_MM if target else source_width
+    target_height = target.height_mm * PT_PER_MM if target else source_height
+    source_ratio = source_width / source_height
+    target_ratio = target_width / target_height
+    ratio_delta = abs(source_ratio / target_ratio - 1.0)
+    if ratio_delta > ASPECT_RATIO_TOLERANCE:
+        raise ValueError(
+            "PDF page aspect ratio does not match the user-confirmed finished trim size."
+        )
+    return target_width, target_height, target_width / source_width, target_height / source_height
+
+
 def _png_reader(image: Image.Image) -> ImageReader:
     payload = io.BytesIO()
     image.convert("RGB").save(payload, format="PNG")
@@ -211,6 +230,7 @@ def add_trim_and_crop_marks(
     output_pdf: str | Path,
     *,
     slug_mm: float = 8.0,
+    target: TargetGeometry | None = None,
 ) -> dict[str, Any]:
     reader = PdfReader(str(input_pdf))
     writer = PdfWriter()
@@ -219,27 +239,31 @@ def add_trim_and_crop_marks(
 
     for index, source_page in enumerate(reader.pages):
         source_trim = _explicit_trim_or_media(source_page)
-        source_width = source_trim[2] - source_trim[0]
-        source_height = source_trim[3] - source_trim[1]
-        output_width = source_width + 2 * slug_pt
-        output_height = source_height + 2 * slug_pt
-        trim = (slug_pt, slug_pt, slug_pt + source_width, slug_pt + source_height)
+        target_width, target_height, scale_x, scale_y = _target_page_geometry(source_trim, target)
+        output_width = target_width + 2 * slug_pt
+        output_height = target_height + 2 * slug_pt
+        trim = (slug_pt, slug_pt, slug_pt + target_width, slug_pt + target_height)
         overlay_page = _marks_overlay_page(output_width, output_height, trim, 0.0, None)
-        target = writer.add_blank_page(width=output_width, height=output_height)
-        target.merge_page(overlay_page)
+        output_page = writer.add_blank_page(width=output_width, height=output_height)
+        output_page.merge_page(overlay_page)
         source_page.cropbox = RectangleObject(list(source_trim))
-        tx = slug_pt - source_trim[0]
-        ty = slug_pt - source_trim[1]
-        target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
-        target.mediabox = RectangleObject([0, 0, output_width, output_height])
-        target.cropbox = RectangleObject([0, 0, output_width, output_height])
-        target.trimbox = RectangleObject(list(trim))
+        tx = slug_pt - source_trim[0] * scale_x
+        ty = slug_pt - source_trim[1] * scale_y
+        page_transform = Transformation(ctm=(scale_x, 0, 0, scale_y, tx, ty))
+        output_page.merge_transformed_page(source_page, page_transform, over=True)
+        output_page.mediabox = RectangleObject([0, 0, output_width, output_height])
+        output_page.cropbox = RectangleObject([0, 0, output_width, output_height])
+        output_page.trimbox = RectangleObject(list(trim))
         page_results.append({
             "page": index + 1,
             "strategy": "trim_and_crop_marks",
             "slugMm": slug_mm,
             "cropMarksAdded": True,
             "bleedGenerated": False,
+            "targetWidthMm": round((trim[2] - trim[0]) / PT_PER_MM, 3),
+            "targetHeightMm": round((trim[3] - trim[1]) / PT_PER_MM, 3),
+            "scaleX": round(scale_x, 6),
+            "scaleY": round(scale_y, 6),
         })
 
     output = Path(output_pdf)
@@ -250,7 +274,8 @@ def add_trim_and_crop_marks(
 
 
 def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, analysis: dict[str, Any],
-                             bleed_mm: float = 3.0, slug_mm: float = 8.0) -> dict[str, Any]:
+                             bleed_mm: float = 3.0, slug_mm: float = 8.0,
+                             target: TargetGeometry | None = None) -> dict[str, Any]:
     reader = PdfReader(str(input_pdf))
     writer = PdfWriter()
     bleed_pt = bleed_mm * PT_PER_MM
@@ -262,12 +287,11 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
         strategy = classification["recommendedStrategy"]
         rgb = tuple(classification["sampledRgb"]) if strategy == "solid_color_extend" else None
         source_trim = _explicit_trim_or_media(source_page)
-        source_width = source_trim[2] - source_trim[0]
-        source_height = source_trim[3] - source_trim[1]
+        target_width, target_height, scale_x, scale_y = _target_page_geometry(source_trim, target)
         margin = bleed_pt + slug_pt
-        output_width = source_width + 2 * margin
-        output_height = source_height + 2 * margin
-        trim = (margin, margin, margin + source_width, margin + source_height)
+        output_width = target_width + 2 * margin
+        output_height = target_height + 2 * margin
+        trim = (margin, margin, margin + target_width, margin + target_height)
 
         if strategy == "solid_color_extend":
             bleed_overlay = _marks_overlay_page(output_width, output_height, trim, bleed_pt, rgb)
@@ -285,17 +309,18 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
             applied_strategy = "edge_pixel_mirror_extend"
             safety = "confirm"
         marks_overlay = _marks_overlay_page(output_width, output_height, trim, bleed_pt, None)
-        target = writer.add_blank_page(width=output_width, height=output_height)
-        target.merge_page(bleed_overlay)
+        output_page = writer.add_blank_page(width=output_width, height=output_height)
+        output_page.merge_page(bleed_overlay)
         source_page.cropbox = RectangleObject(list(source_trim))
-        tx = margin - source_trim[0]
-        ty = margin - source_trim[1]
-        target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
-        target.merge_page(marks_overlay)
-        target.mediabox = RectangleObject([0, 0, output_width, output_height])
-        target.cropbox = RectangleObject([0, 0, output_width, output_height])
-        target.trimbox = RectangleObject(list(trim))
-        target.bleedbox = RectangleObject([
+        tx = margin - source_trim[0] * scale_x
+        ty = margin - source_trim[1] * scale_y
+        page_transform = Transformation(ctm=(scale_x, 0, 0, scale_y, tx, ty))
+        output_page.merge_transformed_page(source_page, page_transform, over=True)
+        output_page.merge_page(marks_overlay)
+        output_page.mediabox = RectangleObject([0, 0, output_width, output_height])
+        output_page.cropbox = RectangleObject([0, 0, output_width, output_height])
+        output_page.trimbox = RectangleObject(list(trim))
+        output_page.bleedbox = RectangleObject([
             trim[0] - bleed_pt,
             trim[1] - bleed_pt,
             trim[2] + bleed_pt,
@@ -311,6 +336,10 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
             "cropMarksAdded": True,
             "cropMarksOutsideBleed": True,
             "trimAreaPreserved": True,
+            "targetWidthMm": round((trim[2] - trim[0]) / PT_PER_MM, 3),
+            "targetHeightMm": round((trim[3] - trim[1]) / PT_PER_MM, 3),
+            "scaleX": round(scale_x, 6),
+            "scaleY": round(scale_y, 6),
         })
 
     output = Path(output_pdf)

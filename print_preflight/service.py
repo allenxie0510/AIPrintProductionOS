@@ -23,6 +23,7 @@ from .isolated import (
     render_pdf_preview_isolated,
 )
 from .fixer import supports_pdfx4
+from .geometry import TargetGeometry, target_geometry
 from .job_store import JobStore
 from .presets import PrintPreset, get_print_preset
 from .profiles import resolve_cmyk_profile
@@ -79,6 +80,11 @@ class PreflightService:
         issues = preflight.get("issues") or []
         codes = {issue.get("code") for issue in issues}
         bleed_issues = [issue for issue in issues if issue.get("code") == "PAGE.BLEED_INSUFFICIENT"]
+        geometry_issues = [issue for issue in issues if issue.get("code") == "PAGE.TARGET_SIZE_MISMATCH"]
+        geometry_blocked = any(issue.get("fix", {}).get("safety") == "manual" for issue in geometry_issues)
+        geometry_needs_normalization = any(
+            issue.get("fix", {}).get("safety") == "confirm" for issue in geometry_issues
+        )
         automatic_bleed = bool(bleed_issues) and all(
             issue.get("fix", {}).get("safety") == "auto"
             and issue.get("fix", {}).get("mode") == "solid_color_extend"
@@ -89,8 +95,16 @@ class PreflightService:
             and issue.get("fix", {}).get("mode") == "content_aware_or_manual"
             for issue in bleed_issues
         )
-        bleed_executable = automatic_bleed or edge_bleed
+        bleed_executable = (automatic_bleed or edge_bleed) and not geometry_blocked
         trim_missing = "PAGE.TRIMBOX_MISSING" in codes
+        target = preflight.get("policy", {}).get("targetGeometry") or {}
+        target_label = target.get("label") or "目标"
+        target_dimensions = (
+            f"{target.get('widthMm'):g} × {target.get('heightMm'):g} mm"
+            if isinstance(target.get("widthMm"), (int, float))
+            and isinstance(target.get("heightMm"), (int, float))
+            else "已确认尺寸"
+        )
         unembedded = [font for font in analysis.get("document", {}).get("fonts", []) if not font.get("embedded")]
         try:
             resolve_cmyk_profile()
@@ -108,10 +122,12 @@ class PreflightService:
                 ),
                 "applicable": bool(bleed_issues),
                 "executable": bleed_executable,
-                "safety": "auto" if automatic_bleed else "confirm" if edge_bleed else "manual",
+                "safety": "manual" if geometry_blocked else "auto" if automatic_bleed else "confirm" if edge_bleed else "manual",
                 "method": "solid_color_extend" if automatic_bleed else "edge_pixel_mirror_extend" if edge_bleed else None,
                 "reason": (
-                    "所有页面边缘均被识别为高置信度均匀纯色，可确定性扩展出血。"
+                    "PDF 页面比例与所选成品尺寸不一致；修正尺寸意图前不能安全生成出血。"
+                    if geometry_blocked
+                    else "所有页面边缘均被识别为高置信度均匀纯色，可确定性扩展出血。"
                     if automatic_bleed
                     else "以裁切线内侧边缘像素镜像生成 3 mm 出血；原 Trim Area 保持不变，执行后需查看预览。"
                     if edge_bleed
@@ -120,11 +136,15 @@ class PreflightService:
             },
             {
                 "action": "trim_and_crop_marks",
-                "label": "设置裁切框并添加裁切标记",
-                "applicable": trim_missing,
-                "executable": trim_missing,
-                "safety": "confirm",
-                "reason": "扩展页面工作区并明确 TrimBox；不会生成或声明不存在的出血。",
+                "label": f"按 {target_label} {target_dimensions} 设置成品尺寸与裁切框",
+                "applicable": trim_missing or bool(geometry_issues),
+                "executable": (trim_missing or geometry_needs_normalization) and not geometry_blocked,
+                "safety": "manual" if geometry_blocked else "confirm",
+                "reason": (
+                    "PDF 页面比例与所选成品尺寸不一致；请更正尺寸选择或返回设计软件调整画布。"
+                    if geometry_blocked
+                    else f"按设计师确认的 {target_label} {target_dimensions} 等比缩放整页并写入明确 TrimBox；不会生成出血。"
+                ),
             },
             {
                 "action": "pdfx_candidate",
@@ -188,6 +208,11 @@ class PreflightService:
         return existing_output if existing_output and existing_output.is_file() else Path(job["source_path"])
 
     @staticmethod
+    def _target_geometry(job: dict[str, Any]) -> TargetGeometry | None:
+        payload = job.get("target_geometry")
+        return TargetGeometry.from_dict(payload) if payload else None
+
+    @staticmethod
     def _normalized_font_name(value: str) -> str:
         without_subset = re.sub(r"^[A-Z]{6}\+", "", value or "")
         return re.sub(r"[^a-z0-9]", "", without_subset.lower())
@@ -222,7 +247,11 @@ class PreflightService:
         after_analysis = analyze_pdf_isolated(derivative, max_pages=MAX_PAGES)
         preset: PrintPreset = get_print_preset(job["preset_id"])
         before_preflight = report.get("afterPreflight") or report["preflight"]
-        after_preflight = run_preflight(after_analysis, preset=preset)
+        after_preflight = run_preflight(
+            after_analysis,
+            preset=preset,
+            target=self._target_geometry(job),
+        )
         if "pdfx_candidate" in fix_event.get("actions", []):
             before_low_ppi = [
                 float((issue.get("evidence") or {}).get("dpi", preset.required_image_ppi))
@@ -246,8 +275,12 @@ class PreflightService:
                     409,
                 )
         resolved_by_action = {
-            "bleed_and_crop": {"PAGE.TRIMBOX_MISSING", "PAGE.BLEED_INSUFFICIENT"},
-            "trim_and_crop_marks": {"PAGE.TRIMBOX_MISSING"},
+            "bleed_and_crop": {
+                "PAGE.TARGET_SIZE_MISMATCH",
+                "PAGE.TRIMBOX_MISSING",
+                "PAGE.BLEED_INSUFFICIENT",
+            },
+            "trim_and_crop_marks": {"PAGE.TRIMBOX_MISSING", "PAGE.TARGET_SIZE_MISMATCH"},
             "pdfx_candidate": {"COLOR.RGB_USED", "FONT.NOT_EMBEDDED", "PDFX.NOT_DECLARED"},
             "replace_image": {"IMAGE.LOW_EFFECTIVE_DPI"},
         }
@@ -314,12 +347,24 @@ class PreflightService:
         )
         return {**self.public_job(job_id), "report": updated_report}
 
-    def create_job(self, upload: BinaryIO, filename: str | None, preset_id: str) -> dict[str, Any]:
+    def create_job(
+        self,
+        upload: BinaryIO,
+        filename: str | None,
+        preset_id: str,
+        size_id: str,
+        trim_width_mm: float,
+        trim_height_mm: float,
+    ) -> dict[str, Any]:
         self.store.cleanup_expired()
         try:
             preset = get_print_preset(preset_id)
         except ValueError as error:
             raise MvpError("PRINT_PRESET_UNKNOWN", str(error), 422) from error
+        try:
+            target = target_geometry(size_id, trim_width_mm, trim_height_mm)
+        except (TypeError, ValueError) as error:
+            raise MvpError("TARGET_TRIM_SIZE_INVALID", str(error), 422) from error
         job_id = uuid4().hex
         access_token = secrets.token_urlsafe(32)
         job_dir = self._job_dir(job_id)
@@ -346,6 +391,7 @@ class PreflightService:
             access_token=access_token,
             original_name=self._safe_name(filename),
             preset_id=preset.preset_id,
+            target_geometry=target.to_dict(),
             source_path=source,
             expires_at=expires,
         )
@@ -359,7 +405,11 @@ class PreflightService:
         self.store.update(job_id, status="analyzing")
         try:
             analysis = analyze_pdf_isolated(source, max_pages=MAX_PAGES)
-            preflight = run_preflight(analysis, preset=get_print_preset(job["preset_id"]))
+            preflight = run_preflight(
+                analysis,
+                preset=get_print_preset(job["preset_id"]),
+                target=self._target_geometry(job),
+            )
             preview = self._preview_metadata(source, self._job_dir(job_id), stage="source")
             report = {
                 "analysis": public_analysis(analysis, self.data_dir),
@@ -400,6 +450,7 @@ class PreflightService:
             "jobId": job["id"],
             "fileName": job["original_name"],
             "presetId": job["preset_id"],
+            "targetGeometry": job.get("target_geometry"),
             "status": job["status"],
             "createdAt": job["created_at"],
             "updatedAt": job["updated_at"],
@@ -470,12 +521,17 @@ class PreflightService:
                     boxed,
                     analyze_pdf_isolated(working, max_pages=MAX_PAGES),
                     bleed_mm=get_print_preset(job["preset_id"]).bleed_mm,
+                    target=self._target_geometry(job),
                 )
                 fix_results.append(public_analysis(result, self.data_dir))
                 working = boxed
             if "trim_and_crop_marks" in actions:
                 trimmed = job_dir / f"trimmed-{stage_id}.pdf"
-                result = add_trim_and_crop_marks_isolated(working, trimmed)
+                result = add_trim_and_crop_marks_isolated(
+                    working,
+                    trimmed,
+                    target=self._target_geometry(job),
+                )
                 fix_results.append(public_analysis(result, self.data_dir))
                 working = trimmed
             if "pdfx_candidate" in actions:

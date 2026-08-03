@@ -3,19 +3,21 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from .geometry import TargetGeometry, page_geometry
 from .presets import DESIGNER_STANDARD_POC, PrintPreset
 
 
 SEVERITY_DEDUCTION = {"FAIL": 18, "WARN": 6, "INFO": 0}
 RULE_SET_ID = "core-preflight"
-RULE_SET_VERSION = "0.3.0-alpha"
+RULE_SET_VERSION = "0.4.0-alpha"
 RULE_VERSIONS = {
     "PDF.ENCRYPTED": "1.0.0",
     "COLOR.RGB_USED": "1.0.0",
     "FONT.NOT_EMBEDDED": "1.1.0",
-    "IMAGE.LOW_EFFECTIVE_DPI": "1.2.0",
+    "IMAGE.LOW_EFFECTIVE_DPI": "1.3.0",
+    "PAGE.TARGET_SIZE_MISMATCH": "1.0.0",
     "PAGE.TRIMBOX_MISSING": "1.0.0",
-    "PAGE.BLEED_INSUFFICIENT": "1.2.0",
+    "PAGE.BLEED_INSUFFICIENT": "1.3.0",
     "PDFX.NOT_DECLARED": "1.1.0",
 }
 
@@ -104,6 +106,7 @@ def run_preflight(
     bleed_mm: float | None = None,
     *,
     preset: PrintPreset | None = None,
+    target: TargetGeometry | None = None,
 ) -> dict[str, Any]:
     selected_preset, overrides = _effective_preset(preset, required_dpi, bleed_mm)
     required_dpi = selected_preset.required_image_ppi
@@ -111,6 +114,8 @@ def run_preflight(
     issues: list[dict[str, Any]] = []
     source = analysis["source"]
     document = analysis["document"]
+    geometry_pages = [page_geometry(page, target) for page in analysis["pages"]] if target else []
+    geometry_by_page = {item["page"]: item for item in geometry_pages}
 
     if source["encrypted"]:
         issues.append(
@@ -152,7 +157,21 @@ def run_preflight(
         )
 
     for image in document["images"]:
-        dpi = image["minEffectiveDpi"]
+        geometry = geometry_by_page.get(image["page"])
+        raw_width_mm = float(image["bbox"]["widthMm"])
+        raw_height_mm = float(image["bbox"]["heightMm"])
+        if geometry and geometry["aspectRatioCompatible"]:
+            placed_width_mm = raw_width_mm * float(geometry["scaleX"])
+            placed_height_mm = raw_height_mm * float(geometry["scaleY"])
+            dpi_x = float(image["pixelWidth"]) * 25.4 / placed_width_mm if placed_width_mm > 0 else 0.0
+            dpi_y = float(image["pixelHeight"]) * 25.4 / placed_height_mm if placed_height_mm > 0 else 0.0
+            dpi = round(min(dpi_x, dpi_y), 2)
+            measurement_basis = "user_confirmed_trim_size"
+        else:
+            placed_width_mm = raw_width_mm
+            placed_height_mm = raw_height_mm
+            dpi = float(image["minEffectiveDpi"])
+            measurement_basis = "pdf_geometry_unresolved" if geometry else "pdf_page_geometry"
         if dpi < required_dpi:
             severity = "FAIL" if dpi < 150 else "WARN"
             issues.append(
@@ -168,8 +187,9 @@ def run_preflight(
                         "placementIndex": image["placementIndex"],
                         "pixelWidth": image["pixelWidth"],
                         "pixelHeight": image["pixelHeight"],
-                        "placedWidthMm": float(image["bbox"]["widthMm"]),
-                        "placedHeightMm": float(image["bbox"]["heightMm"]),
+                        "placedWidthMm": round(placed_width_mm, 3),
+                        "placedHeightMm": round(placed_height_mm, 3),
+                        "measurementBasis": measurement_basis,
                     },
                     auto_fix="super_resolution_or_replace_source",
                     safety="confirm",
@@ -178,6 +198,28 @@ def run_preflight(
 
     for page in analysis["pages"]:
         page_number = page["pageNumber"]
+        geometry = geometry_by_page.get(page_number)
+        if geometry and not geometry["sizeMatches"]:
+            compatible = bool(geometry["aspectRatioCompatible"])
+            issues.append(
+                _issue(
+                    "PAGE.TARGET_SIZE_MISMATCH",
+                    "FAIL",
+                    (
+                        f"PDF page is {geometry['observedWidthMm']} × {geometry['observedHeightMm']} mm; "
+                        f"confirmed finished size is {geometry['targetWidthMm']} × {geometry['targetHeightMm']} mm."
+                    ),
+                    page=page_number,
+                    evidence=geometry,
+                    auto_fix=(
+                        "scale_page_to_confirmed_trim_size"
+                        if compatible
+                        else "return_to_design_tool_or_correct_target_size"
+                    ),
+                    safety="confirm" if compatible else "manual",
+                    confidence=1.0,
+                )
+            )
         if not page["trimBox"]["explicit"]:
             issues.append(
                 _issue(
@@ -189,10 +231,19 @@ def run_preflight(
                     safety="confirm",
                 )
             )
-        margins = page["bleedMargins"]
+        margins = dict(page["bleedMargins"])
+        if geometry and geometry["aspectRatioCompatible"]:
+            margins = {
+                "leftMm": float(margins["leftMm"]) * float(geometry["scaleX"]),
+                "topMm": float(margins["topMm"]) * float(geometry["scaleY"]),
+                "rightMm": float(margins["rightMm"]) * float(geometry["scaleX"]),
+                "bottomMm": float(margins["bottomMm"]) * float(geometry["scaleY"]),
+            }
+            margins = {key: round(value, 3) for key, value in margins.items()}
         minimum = min(margins.values())
         if not page["bleedBox"]["explicit"] or minimum + 0.01 < bleed_mm:
             border = page["border"]
+            geometry_unresolved = bool(geometry and not geometry["aspectRatioCompatible"])
             issues.append(
                 _issue(
                     "PAGE.BLEED_INSUFFICIENT",
@@ -200,8 +251,12 @@ def run_preflight(
                     f"Explicit bleed of at least {bleed_mm} mm is not present on every edge.",
                     page=page_number,
                     evidence={"marginsMm": margins, "borderClassification": border},
-                    auto_fix=border["recommendedStrategy"],
-                    safety=border["automationSafety"],
+                    auto_fix=(
+                        "return_to_design_tool_or_correct_target_size"
+                        if geometry_unresolved
+                        else border["recommendedStrategy"]
+                    ),
+                    safety="manual" if geometry_unresolved else border["automationSafety"],
                     confidence=border["uniformPixelRatio"],
                 )
             )
@@ -237,6 +292,8 @@ def run_preflight(
             "requiredImageDpi": required_dpi,
             "requiredBleedMm": bleed_mm,
             "printPreset": selected_preset.to_dict(),
+            "targetGeometry": target.to_dict() if target else None,
+            "pageGeometry": geometry_pages,
             "runtimeOverrides": overrides,
         },
         "issues": issues,

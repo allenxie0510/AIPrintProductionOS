@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from print_preflight.analyzer import analyze_pdf
+from print_preflight.geometry import TargetGeometry, target_geometry
 from print_preflight.presets import DESIGNER_STANDARD_POC, PrintPreset, get_print_preset
 from print_preflight.rules import RULE_VERSIONS, run_preflight
 from scripts.generate_samples import make_sample
@@ -77,6 +78,38 @@ class VersionedRuleEngineTest(unittest.TestCase):
                 target_pdfx="none",
                 color_policy="diagnostic-only",
             )
+
+    def test_confirmed_trim_size_controls_effective_ppi_measurement(self) -> None:
+        analysis = self._analysis()
+        diagnostic = PrintPreset(
+            preset_id="test-target-size",
+            version="1.0.0",
+            label="Test target size",
+            product_type="test",
+            required_image_ppi=100,
+            bleed_mm=3.0,
+            target_pdfx="none",
+            color_policy="diagnostic-only",
+            status="test-only",
+        )
+        a5 = target_geometry("a5", 148, 210)
+
+        result = run_preflight(analysis, preset=diagnostic, target=a5)
+        codes = {issue["code"] for issue in result["issues"]}
+
+        self.assertNotIn("IMAGE.LOW_EFFECTIVE_DPI", codes)
+        self.assertIn("PAGE.TARGET_SIZE_MISMATCH", codes)
+        size_issue = next(issue for issue in result["issues"] if issue["code"] == "PAGE.TARGET_SIZE_MISMATCH")
+        self.assertEqual(size_issue["fix"]["safety"], "confirm")
+        self.assertEqual(result["policy"]["targetGeometry"]["sizeId"], "a5")
+
+    def test_incompatible_target_aspect_ratio_is_manual(self) -> None:
+        square = TargetGeometry("custom", "自定义", 210, 210)
+        result = run_preflight(self._analysis(), preset=DESIGNER_STANDARD_POC, target=square)
+        issue = next(item for item in result["issues"] if item["code"] == "PAGE.TARGET_SIZE_MISMATCH")
+
+        self.assertEqual(issue["fix"]["safety"], "manual")
+        self.assertFalse(issue["evidence"]["aspectRatioCompatible"])
 
 
 if __name__ == "__main__":

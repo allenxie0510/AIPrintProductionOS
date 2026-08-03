@@ -23,7 +23,7 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 
 ## Automated coverage
 
-### Python — 20 passing tests
+### Python — 23 passing tests
 
 - invalid file and unknown preset rejection;
 - token isolation;
@@ -47,6 +47,9 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - exact user sequence `set TrimBox → add image bleed`, proving TrimBox dimensions do not grow, BleedBox is 3 mm on every edge, the earlier marks are clipped, and the final marks remain outside bleed;
 - protected image-XObject thumbnail generation plus page, pixel and placed-size evidence;
 - document-wide CMYK conversion provenance (`all_pages`, page count and ICC SHA-256) and post-conversion absence of used RGB evidence.
+- canonical/custom Target Geometry validation and immutable job/report projection;
+- Figma-style A4-ratio point canvas normalization to an exact user-confirmed 210 × 297 mm TrimBox;
+- Effective PPI recalculation at the confirmed finished scale and manual blocking for incompatible aspect ratios.
 
 ### Resource regression
 
@@ -61,6 +64,8 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - ESLint: PASS.
 - server-rendered product smoke test: PASS.
 - responsive upload, diagnosis, per-issue repair, completion and result states implemented.
+- product Print Preset and finished Trim Size are separate mandatory controls; standard A/B sizes, two B5 standards, business card, custom millimetres and orientation swap are implemented.
+- diagnosis shows confirmed Trim Size beside observed PDF page size and never presents automatic paper-name detection as user intent.
 - uploaded PDF preview and repaired-file before/after slider implemented.
 - current derivative preview is shown by default after every completed mutation; comparison is an explicit secondary mode.
 - exact font upload and high-resolution image replacement controls are attached to their diagnosed issue rows.

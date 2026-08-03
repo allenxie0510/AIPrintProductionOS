@@ -59,10 +59,12 @@ def _parser() -> argparse.ArgumentParser:
     bleed.add_argument("output")
     bleed.add_argument("analysis")
     bleed.add_argument("--bleed-mm", type=float, required=True)
+    bleed.add_argument("--target-json")
 
     trim_crop = subcommands.add_parser("trim-crop")
     trim_crop.add_argument("input")
     trim_crop.add_argument("output")
+    trim_crop.add_argument("--target-json")
 
     replace_image = subcommands.add_parser("replace-image")
     replace_image.add_argument("input")
@@ -111,18 +113,23 @@ def main() -> int:
             )
         elif args.stage == "bleed":
             from .fixer import add_bleed_and_crop_marks
+            from .geometry import TargetGeometry
 
             analysis = json.loads(Path(args.analysis).read_text(encoding="utf-8"))
+            target = TargetGeometry.from_dict(json.loads(args.target_json)) if args.target_json else None
             result = add_bleed_and_crop_marks(
                 args.input,
                 args.output,
                 analysis,
                 bleed_mm=args.bleed_mm,
+                target=target,
             )
         elif args.stage == "trim-crop":
             from .fixer import add_trim_and_crop_marks
+            from .geometry import TargetGeometry
 
-            result = add_trim_and_crop_marks(args.input, args.output)
+            target = TargetGeometry.from_dict(json.loads(args.target_json)) if args.target_json else None
+            result = add_trim_and_crop_marks(args.input, args.output, target=target)
         elif args.stage == "replace-image":
             from .fixer import replace_pdf_image
 
