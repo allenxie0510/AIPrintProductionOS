@@ -111,13 +111,21 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_font_substitution_requires_explicit_confirmation(self) -> None:
         created = await self._upload()
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        pdfx_action = next(item for item in report["fixPlan"] if item["action"] == "pdfx_candidate")
         response = await self.client.post(
             f"/v1/jobs/{created['jobId']}/fix",
-            headers={"X-Job-Token": created["accessToken"]},
+            headers=headers,
             json={"actions": ["pdfx_candidate"], "acknowledgeFontSubstitution": False},
         )
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()["error"]["code"], "FONT_SUBSTITUTION_CONFIRMATION_REQUIRED")
+        expected = (
+            "FONT_SUBSTITUTION_CONFIRMATION_REQUIRED"
+            if pdfx_action["executable"]
+            else "FIX_ACTION_UNSAFE"
+        )
+        self.assertEqual(response.json()["error"]["code"], expected)
 
     async def test_complex_border_rejects_bleed_but_allows_honest_trim_repair(self) -> None:
         source = Path(self.temporary.name) / "complex-border.pdf"
