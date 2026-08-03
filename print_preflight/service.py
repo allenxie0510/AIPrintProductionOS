@@ -19,6 +19,7 @@ from .isolated import (
     export_pdfx4_cmyk_isolated,
     inspect_font_file_isolated,
     replace_pdf_image_isolated,
+    render_image_thumbnail_isolated,
     render_pdf_preview_isolated,
 )
 from .fixer import supports_pdfx4
@@ -48,7 +49,7 @@ def public_analysis(value: Any, root: Path) -> Any:
         return {
             key: public_analysis(item, root)
             for key, item in value.items()
-            if key not in {"absolutePath", "command", "stdout", "stderr", "source_path", "output_path"}
+            if key not in {"absolutePath", "command", "stdout", "stderr", "source_path", "output_path", "profile"}
         }
     if isinstance(value, list):
         return [public_analysis(item, root) for item in value]
@@ -83,6 +84,12 @@ class PreflightService:
             and issue.get("fix", {}).get("mode") == "solid_color_extend"
             for issue in bleed_issues
         )
+        edge_bleed = bool(bleed_issues) and not automatic_bleed and all(
+            issue.get("fix", {}).get("safety") == "confirm"
+            and issue.get("fix", {}).get("mode") == "content_aware_or_manual"
+            for issue in bleed_issues
+        )
+        bleed_executable = automatic_bleed or edge_bleed
         trim_missing = "PAGE.TRIMBOX_MISSING" in codes
         unembedded = [font for font in analysis.get("document", {}).get("fonts", []) if not font.get("embedded")]
         try:
@@ -94,21 +101,28 @@ class PreflightService:
         return [
             {
                 "action": "bleed_and_crop",
-                "label": "扩展安全纯色背景并添加裁切标记",
+                "label": (
+                    "扩展安全纯色背景并添加裁切标记"
+                    if automatic_bleed
+                    else "镜像延展边缘像素并添加裁切标记"
+                ),
                 "applicable": bool(bleed_issues),
-                "executable": automatic_bleed,
-                "safety": "auto" if automatic_bleed else "manual",
+                "executable": bleed_executable,
+                "safety": "auto" if automatic_bleed else "confirm" if edge_bleed else "manual",
+                "method": "solid_color_extend" if automatic_bleed else "edge_pixel_mirror_extend" if edge_bleed else None,
                 "reason": (
                     "所有页面边缘均被识别为高置信度均匀纯色，可确定性扩展出血。"
                     if automatic_bleed
-                    else "页面边缘包含复杂内容，不能在不生成新画面的前提下安全补足出血。"
+                    else "以裁切线内侧边缘像素镜像生成 3 mm 出血；原 Trim Area 保持不变，执行后需查看预览。"
+                    if edge_bleed
+                    else "页面边缘无法安全生成出血，请返回设计软件延展贴边对象。"
                 ),
             },
             {
                 "action": "trim_and_crop_marks",
                 "label": "设置裁切框并添加裁切标记",
-                "applicable": trim_missing and not automatic_bleed,
-                "executable": trim_missing and not automatic_bleed,
+                "applicable": trim_missing,
+                "executable": trim_missing,
                 "safety": "confirm",
                 "reason": "扩展页面工作区并明确 TrimBox；不会生成或声明不存在的出血。",
             },
@@ -130,9 +144,9 @@ class PreflightService:
     @staticmethod
     def _action_summaries(actions: list[str]) -> list[str]:
         labels = {
-            "bleed_and_crop": "已扩展安全纯色出血并添加裁切标记。",
+            "bleed_and_crop": "已按 TrimBox 在裁切线外生成出血，并仅保留一套位于出血外侧的裁切标记。",
             "trim_and_crop_marks": "已设置明确裁切框并添加裁切标记；复杂出血仍需人工处理。",
-            "pdfx_candidate": "已生成 CMYK / PDF/X-4 候选并重新执行印前检查。",
+            "pdfx_candidate": "已将整份 PDF 的全部页面批量转换为目标 CMYK，并生成 PDF/X-4 候选后重新检查。",
             "replace_image": "已在原版位置替换高分辨率图片并重新计算有效 PPI。",
         }
         return [labels[action] for action in actions if action in labels]
@@ -678,6 +692,32 @@ class PreflightService:
             if not metadata.get("available"):
                 raise MvpError("PREVIEW_FAILED", "The PDF preview could not be rendered safely.", 422)
         return preview
+
+    def image_thumbnail_path(
+        self,
+        job_id: str,
+        access_token: str,
+        *,
+        xref: int,
+    ) -> Path:
+        job = self.require_job(job_id, access_token)
+        if xref <= 0:
+            raise MvpError("IMAGE_TARGET_INVALID", "Image object reference must be positive.", 422)
+        report = job.get("report") or {}
+        analysis = report.get("afterAnalysis") or report.get("analysis") or {}
+        images = analysis.get("document", {}).get("images", [])
+        if not any(int(item.get("xref", 0)) == xref for item in images):
+            raise MvpError("IMAGE_TARGET_NOT_FOUND", "The selected image is not present in the current PDF.", 404)
+        source = self._base_pdf(job)
+        digest = str(analysis.get("source", {}).get("sha256") or "current")[:12]
+        output = self._job_dir(job_id) / f"image-thumbnail-{digest}-{xref}.png"
+        if not output.is_file():
+            try:
+                render_image_thumbnail_isolated(source, output, xref=xref)
+            except EngineProcessError as error:
+                output.unlink(missing_ok=True)
+                raise MvpError(error.code, error.message, 422) from error
+        return output
 
     def delete(self, job_id: str, access_token: str) -> dict[str, Any]:
         self.require_job(job_id, access_token)

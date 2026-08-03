@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import pymupdf
+from PIL import Image
 
 from print_preflight.analyzer import analyze_pdf
 from print_preflight.engine_worker import _parser
@@ -91,6 +92,54 @@ class PreflightPocTest(unittest.TestCase):
             self.assertTrue(preview.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertLessEqual(max(rendered["width"], rendered["height"]), 640)
 
+    def test_trim_then_image_bleed_keeps_one_trim_and_marks_outside_three_mm_bleed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "complex.pdf"
+            trimmed = root / "trimmed.pdf"
+            final = root / "final.pdf"
+            with pymupdf.open() as document:
+                page = document.new_page(width=300, height=420)
+                half_width = page.rect.width / 2
+                half_height = page.rect.height / 2
+                for rectangle, color in zip(
+                    [
+                        pymupdf.Rect(0, 0, half_width, half_height),
+                        pymupdf.Rect(half_width, 0, page.rect.width, half_height),
+                        pymupdf.Rect(0, half_height, half_width, page.rect.height),
+                        pymupdf.Rect(half_width, half_height, page.rect.width, page.rect.height),
+                    ],
+                    [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)],
+                    strict=True,
+                ):
+                    page.draw_rect(rectangle, color=color, fill=color)
+                document.save(source)
+
+            add_trim_and_crop_marks(source, trimmed)
+            trimmed_analysis = analyze_pdf(trimmed)
+            result = add_bleed_and_crop_marks(trimmed, final, trimmed_analysis)
+            self.assertEqual(result["pages"][0]["strategy"], "edge_pixel_mirror_extend")
+            self.assertTrue(result["pages"][0]["cropMarksOutsideBleed"])
+
+            final_analysis = analyze_pdf(final)
+            page = final_analysis["pages"][0]
+            self.assertAlmostEqual(page["trimBox"]["widthMm"], 300 / 72 * 25.4, places=2)
+            self.assertAlmostEqual(page["trimBox"]["heightMm"], 420 / 72 * 25.4, places=2)
+            self.assertTrue(all(abs(value - 3.0) < 0.01 for value in page["bleedMargins"].values()))
+            self.assertNotIn("PAGE.BLEED_INSUFFICIENT", {item["code"] for item in run_preflight(final_analysis)["issues"]})
+
+            with pymupdf.open(final) as document:
+                final_page = document[0]
+                bleed_render = final_page.get_pixmap(
+                    matrix=pymupdf.Matrix(3, 3),
+                    colorspace=pymupdf.csRGB,
+                    alpha=False,
+                    clip=final_page.bleedbox,
+                )
+            pixels = Image.frombytes("RGB", (bleed_render.width, bleed_render.height), bleed_render.samples)
+            dark_pixels = sum(1 for red, green, blue in pixels.get_flattened_data() if max(red, green, blue) < 40)
+            self.assertEqual(dark_pixels, 0, "No earlier crop marks may remain inside the final BleedBox")
+
     @unittest.skipUnless(
         shutil.which("gs") and PROFILE.exists() and supports_pdfx4(),
         "Ghostscript >= 10.07 and a CMYK profile are required for PDF/X-4 generation",
@@ -111,6 +160,11 @@ class PreflightPocTest(unittest.TestCase):
             self.assertTrue(fixed["document"]["pdfx"]["hasOutputIntent"])
             self.assertEqual(fixed["document"]["pdfx"]["declaredVersion"], "PDF/X-4")
             self.assertTrue(all(font["embedded"] for font in fixed["document"]["fonts"]))
+            conversion = export_pdfx4_cmyk(boxed, root / "final-2.pdf", PROFILE, root)
+            self.assertEqual(conversion["strategy"], "document_wide_icc_cmyk")
+            self.assertEqual(conversion["scope"], "all_pages")
+            self.assertEqual(conversion["pageCount"], 1)
+            self.assertEqual(len(conversion["profileSha256"]), 64)
 
 
 if __name__ == "__main__":

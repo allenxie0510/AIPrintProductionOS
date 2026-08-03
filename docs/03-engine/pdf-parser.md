@@ -7,13 +7,14 @@ Status: POC
 - Reject or route encrypted/unsupported inputs.
 - Extract pages, boxes, images, fonts, colors and PDF/X evidence.
 - Calculate placement-dependent effective DPI.
+- Bind each low-resolution placement to page, object reference, pixel dimensions, placed dimensions and a short-lived protected thumbnail.
 - Emit UDF observations and confidence, not production verdicts.
 
 ## POC Implementation
 
 `print_preflight/analyzer.py` uses PyMuPDF for page geometry, fonts, color evidence and bounded edge rendering. Image placements are read from PDF content streams with pypdf, including nested Form XObjects and their transformation matrices. This avoids MuPDF display-list expansion while retaining source pixel dimensions, placed size and effective PPI evidence. qpdf provides an independent structural check.
 
-The online adapter runs every analyze/fix stage in a separate process with configurable memory, CPU and wall-time limits. Resource exits become structured job failures instead of terminating the API process.
+The online adapter runs every analyze/fix/thumbnail stage in a separate process with configurable memory, CPU and wall-time limits. Resource exits become structured job failures instead of terminating the API process. When TrimBox is explicit, edge classification samples that finished-art boundary rather than a surrounding slug or prior crop-mark workspace.
 
 ## Known Limits
 

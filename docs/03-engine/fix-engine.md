@@ -21,7 +21,8 @@ Status: Alpha MVP
 | PDF/X candidate | confirm | Generated; independent validation pending |
 | Replace low-DPI image with higher-resolution original | confirm | Implemented by PDF image XObject reference; required pixels are calculated from placement and target PPI |
 | Low-DPI super-resolution | confirm | Not implemented; original issue must remain |
-| Complex photo bleed | confirm/manual | Not implemented |
+| Complex image-edge bleed | confirm | Implemented as deterministic 3 mm edge-pixel mirror extension; Trim Area remains locked |
+| Generative/content-aware bleed | confirm/manual | Not implemented |
 
 ## Mutation Protocol
 
@@ -38,7 +39,8 @@ Status: Alpha MVP
 The rule result is not itself permission to mutate a PDF. The service derives a structured `fixPlan` from the latest analysis and only accepts actions whose `executable` flag remains true when the request arrives.
 
 - Uniform solid borders may use `bleed_and_crop`.
-- Complex borders may use `trim_and_crop_marks`; the bleed issue remains open.
+- Complex image edges may use confirmed `edge_pixel_mirror_extend`. The engine samples only the inner edge bands, mirrors them into the configured bleed area, preserves the original Trim Area, and requires visual review.
+- Geometry repair always normalizes from the current explicit TrimBox (or MediaBox when TrimBox is absent). Earlier slug and crop-mark content is clipped away before a new BleedBox and one crop-mark set are produced, preventing cumulative marks.
 - Low effective PPI remains open until the user supplies a replacement image with enough source pixels. Accepted replacements preserve placement, are re-measured and update the rendered derivative preview.
 - A font upload is retained only when its internal name exactly matches the missing PDF font. It is passed to the PDF/X engine through a task-scoped font path; a nonmatching or substitute font still requires explicit consent.
 - Each repair starts from the current immutable derivative, writes a new intermediate file, re-analyzes the result and updates the repair history.
@@ -46,3 +48,7 @@ The rule result is not itself permission to mutate a PDF. The service derives a 
 - Crop-mark overlays contain only drawing operators; unused default font resources are stripped before merge so a geometry repair cannot create a font issue.
 
 Source and current previews are bounded first-page PNG renders. The UI may place them in a draggable before/after comparator; the preview is evidence for review, not an independent print guarantee.
+
+Low-resolution issues expose a token-protected, no-store image-XObject thumbnail plus page, placement, source pixel dimensions and placed millimetres. This ephemeral evidence is deleted with the job and is never retained as production intelligence.
+
+CMYK conversion is document-scoped, not an image-by-image action. Ghostscript applies the selected ICC policy to all pages in one isolated run; the result records `scope=all_pages`, page count and ICC SHA-256, then the parser confirms that used RGB evidence is gone before the UI can describe the action as completed.
