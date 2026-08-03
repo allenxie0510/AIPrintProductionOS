@@ -9,10 +9,12 @@
 ```text
 Upload controlled PDF
   → asynchronous job analysis
+  → render token-protected source preview
   → retrieve evidence report
   → select solid-color bleed/crop repair
   → generate immutable derivative
   → re-analyze and qpdf validate
+  → render source/current before-after comparison
   → download PDF
   → immediately delete all artifact bytes
 ```
@@ -21,7 +23,7 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 
 ## Automated coverage
 
-### Python — 12 passing tests
+### Python — 14 passing tests
 
 - invalid file and unknown preset rejection;
 - token isolation;
@@ -34,6 +36,9 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - runtime override identity;
 - invalid preset validation.
 - bounded edge sampling for a generated 5280 × 7500 pt large-format page.
+- bounded PNG preview rendering and authenticated source/current preview endpoints;
+- complex-border rejection for automatic bleed plus honest trim/crop fallback;
+- confirmation that trim-only repair leaves the insufficient-bleed issue unresolved.
 
 ### Resource regression
 
@@ -48,6 +53,8 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - ESLint: PASS.
 - server-rendered product smoke test: PASS.
 - responsive upload, diagnosis, fix confirmation and result states implemented.
+- uploaded PDF preview and repaired-file before/after slider implemented.
+- unavailable repair actions are disabled from the server-authored executable plan.
 - transient Render 502/503/504 polling failures retry with bounded exponential backoff and actionable Chinese errors.
 
 ### Independent structure check

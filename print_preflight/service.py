@@ -12,9 +12,12 @@ from uuid import uuid4
 from .isolated import (
     EngineProcessError,
     add_bleed_and_crop_marks_isolated,
+    add_trim_and_crop_marks_isolated,
     analyze_pdf_isolated,
     export_pdfx4_cmyk_isolated,
+    render_pdf_preview_isolated,
 )
+from .fixer import supports_pdfx4
 from .job_store import JobStore
 from .presets import PrintPreset, get_print_preset
 from .profiles import resolve_cmyk_profile
@@ -64,6 +67,91 @@ class PreflightService:
         candidate = Path(name or "upload.pdf").name
         return candidate[:180] or "upload.pdf"
 
+    @staticmethod
+    def _fix_plan(analysis: dict[str, Any], preflight: dict[str, Any]) -> list[dict[str, Any]]:
+        issues = preflight.get("issues") or []
+        codes = {issue.get("code") for issue in issues}
+        bleed_issues = [issue for issue in issues if issue.get("code") == "PAGE.BLEED_INSUFFICIENT"]
+        automatic_bleed = bool(bleed_issues) and all(
+            issue.get("fix", {}).get("safety") == "auto"
+            and issue.get("fix", {}).get("mode") == "solid_color_extend"
+            for issue in bleed_issues
+        )
+        trim_missing = "PAGE.TRIMBOX_MISSING" in codes
+        unembedded = [font for font in analysis.get("document", {}).get("fonts", []) if not font.get("embedded")]
+        try:
+            resolve_cmyk_profile()
+            pdfx_available = supports_pdfx4()
+        except FileNotFoundError:
+            pdfx_available = False
+
+        return [
+            {
+                "action": "bleed_and_crop",
+                "label": "扩展安全纯色背景并添加裁切标记",
+                "applicable": bool(bleed_issues),
+                "executable": automatic_bleed,
+                "safety": "auto" if automatic_bleed else "manual",
+                "reason": (
+                    "所有页面边缘均被识别为高置信度均匀纯色，可确定性扩展出血。"
+                    if automatic_bleed
+                    else "页面边缘包含复杂内容，不能在不生成新画面的前提下安全补足出血。"
+                ),
+            },
+            {
+                "action": "trim_and_crop_marks",
+                "label": "设置裁切框并添加裁切标记",
+                "applicable": trim_missing and not automatic_bleed,
+                "executable": trim_missing and not automatic_bleed,
+                "safety": "confirm",
+                "reason": "扩展页面工作区并明确 TrimBox；不会生成或声明不存在的出血。",
+            },
+            {
+                "action": "pdfx_candidate",
+                "label": "生成 CMYK / PDF/X-4 候选文件",
+                "applicable": bool({"COLOR.RGB_USED", "PDFX.NOT_DECLARED", "FONT.NOT_EMBEDDED"} & codes),
+                "executable": pdfx_available,
+                "safety": "confirm",
+                "reason": (
+                    "使用配置的目标 ICC 与 Ghostscript 生成候选文件；仍需印厂按目标印刷条件验证。"
+                    if pdfx_available
+                    else "当前处理器缺少兼容的 Ghostscript（>= 10.07）或 CMYK ICC 配置。"
+                ),
+                "requiresFontAcknowledgement": bool(unembedded),
+            },
+        ]
+
+    def _preview_metadata(
+        self,
+        pdf_path: Path,
+        job_dir: Path,
+        *,
+        stage: str,
+        page_number: int = 1,
+    ) -> dict[str, Any]:
+        output = job_dir / f"{stage}-preview-page-{page_number}.png"
+        try:
+            rendered = render_pdf_preview_isolated(
+                pdf_path,
+                output,
+                page_number=page_number,
+            )
+            return {
+                "available": True,
+                "stage": stage,
+                "page": page_number,
+                "width": rendered.get("width"),
+                "height": rendered.get("height"),
+            }
+        except EngineProcessError as error:
+            output.unlink(missing_ok=True)
+            return {
+                "available": False,
+                "stage": stage,
+                "page": page_number,
+                "reason": error.code,
+            }
+
     def create_job(self, upload: BinaryIO, filename: str | None, preset_id: str) -> dict[str, Any]:
         self.store.cleanup_expired()
         try:
@@ -110,9 +198,12 @@ class PreflightService:
         try:
             analysis = analyze_pdf_isolated(source, max_pages=MAX_PAGES)
             preflight = run_preflight(analysis, preset=get_print_preset(job["preset_id"]))
+            preview = self._preview_metadata(source, self._job_dir(job_id), stage="source")
             report = {
                 "analysis": public_analysis(analysis, self.data_dir),
                 "preflight": preflight,
+                "fixPlan": self._fix_plan(analysis, preflight),
+                "previews": {"source": preview},
                 "validation": None,
                 "fix": None,
             }
@@ -174,11 +265,19 @@ class PreflightService:
         job = self.require_job(job_id, access_token)
         if job["status"] not in {"awaiting_decision", "partial", "ready"}:
             raise MvpError("JOB_NOT_FIXABLE", "The job is not ready for a fix plan.", 409)
-        allowed = {"bleed_and_crop", "pdfx_candidate"}
+        allowed = {"bleed_and_crop", "trim_and_crop_marks", "pdfx_candidate"}
         if not actions or set(actions) - allowed:
             raise MvpError("FIX_PLAN_INVALID", "Select at least one supported fix action.", 422)
         report = job["report"]
-        analysis = report["analysis"]
+        analysis = report.get("afterAnalysis") or report["analysis"]
+        preflight = report.get("afterPreflight") or report["preflight"]
+        plan = {item["action"]: item for item in self._fix_plan(analysis, preflight)}
+        unsafe = [action for action in actions if not plan.get(action, {}).get("executable")]
+        if unsafe:
+            reason = plan.get(unsafe[0], {}).get("reason") or "The selected action cannot be executed safely."
+            raise MvpError("FIX_ACTION_UNSAFE", reason, 409)
+        if {"bleed_and_crop", "trim_and_crop_marks"}.issubset(actions):
+            raise MvpError("FIX_PLAN_INVALID", "Bleed extension and trim-only repair are mutually exclusive.", 422)
         unembedded = [font for font in analysis["document"]["fonts"] if not font["embedded"]]
         if "pdfx_candidate" in actions and unembedded and not acknowledge_font_substitution:
             raise MvpError(
@@ -189,12 +288,14 @@ class PreflightService:
 
         source = Path(job["source_path"])
         job_dir = self._job_dir(job_id)
-        working = source
+        existing_output = Path(job["output_path"]) if job.get("output_path") else None
+        working = existing_output if existing_output and existing_output.is_file() else source
+        stage_id = uuid4().hex[:10]
         fix_results: list[dict[str, Any]] = []
         self.store.update(job_id, status="fixing")
         try:
             if "bleed_and_crop" in actions:
-                boxed = job_dir / "boxed.pdf"
+                boxed = job_dir / f"boxed-{stage_id}.pdf"
                 result = add_bleed_and_crop_marks_isolated(
                     working,
                     boxed,
@@ -203,16 +304,21 @@ class PreflightService:
                 )
                 fix_results.append(public_analysis(result, self.data_dir))
                 working = boxed
+            if "trim_and_crop_marks" in actions:
+                trimmed = job_dir / f"trimmed-{stage_id}.pdf"
+                result = add_trim_and_crop_marks_isolated(working, trimmed)
+                fix_results.append(public_analysis(result, self.data_dir))
+                working = trimmed
             if "pdfx_candidate" in actions:
-                candidate = job_dir / "print-ready-candidate.pdf"
+                candidate = job_dir / f"pdfx-{stage_id}.pdf"
                 profile = resolve_cmyk_profile()
                 result = export_pdfx4_cmyk_isolated(working, candidate, profile, job_dir)
                 fix_results.append(public_analysis(result, self.data_dir))
                 working = candidate
-            elif working != source:
-                candidate = job_dir / "print-ready-candidate.pdf"
+            candidate = job_dir / "print-ready-candidate.pdf"
+            if working.resolve() != candidate.resolve():
                 shutil.copy2(working, candidate)
-                working = candidate
+            working = candidate
 
             self.store.update(job_id, status="validating")
             after_analysis = analyze_pdf_isolated(working, max_pages=MAX_PAGES)
@@ -220,16 +326,24 @@ class PreflightService:
             after_preflight = run_preflight(after_analysis, preset=preset)
             validation = self._validate(working)
             status = "ready" if after_preflight["status"] != "FAIL" and validation["syntaxPassed"] else "partial"
-            fix_record = {
+            fix_event = {
                 "actions": actions,
                 "acknowledgedFontSubstitution": acknowledge_font_substitution,
                 "results": fix_results,
+            }
+            previous_history = (report.get("fix") or {}).get("history") or []
+            fix_record = {**fix_event, "history": [*previous_history, fix_event]}
+            previews = {
+                **(report.get("previews") or {}),
+                "current": self._preview_metadata(working, job_dir, stage="current"),
             }
             updated_report = {
                 **report,
                 "fix": fix_record,
                 "afterAnalysis": public_analysis(after_analysis, self.data_dir),
                 "afterPreflight": after_preflight,
+                "fixPlan": self._fix_plan(after_analysis, after_preflight),
+                "previews": previews,
                 "validation": validation,
             }
             self.store.update(
@@ -287,6 +401,30 @@ class PreflightService:
         if output is None or not output.is_file():
             raise MvpError("OUTPUT_NOT_READY", "No output file is available.", 409)
         return output, f"{Path(job['original_name']).stem}-print-ready-candidate.pdf"
+
+    def preview_path(
+        self,
+        job_id: str,
+        access_token: str,
+        *,
+        stage: str,
+        page_number: int,
+    ) -> Path:
+        job = self.require_job(job_id, access_token)
+        if page_number < 1 or page_number > MAX_PAGES:
+            raise MvpError("PREVIEW_PAGE_INVALID", f"Preview page must be between 1 and {MAX_PAGES}.", 422)
+        if stage not in {"source", "current"}:
+            raise MvpError("PREVIEW_STAGE_INVALID", "Preview stage must be source or current.", 422)
+        pdf_value = job.get("source_path") if stage == "source" else job.get("output_path")
+        if not pdf_value or not Path(pdf_value).is_file():
+            raise MvpError("PREVIEW_NOT_READY", "The requested preview is not ready.", 409)
+        job_dir = self._job_dir(job_id)
+        preview = job_dir / f"{stage}-preview-page-{page_number}.png"
+        if not preview.is_file():
+            metadata = self._preview_metadata(Path(pdf_value), job_dir, stage=stage, page_number=page_number)
+            if not metadata.get("available"):
+                raise MvpError("PREVIEW_FAILED", "The PDF preview could not be rendered safely.", 422)
+        return preview
 
     def delete(self, job_id: str, access_token: str) -> dict[str, Any]:
         self.require_job(job_id, access_token)

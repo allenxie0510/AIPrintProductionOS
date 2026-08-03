@@ -19,6 +19,7 @@ This protects unguessable task URLs but is not an account system. Tenant account
 | `POST` | `/v1/jobs` | Stream a PDF into an ephemeral job and enqueue analysis |
 | `GET` | `/v1/jobs/{jobId}` | Job state, score and expiry |
 | `GET` | `/v1/jobs/{jobId}/report` | Evidence, issues and validation report |
+| `GET` | `/v1/jobs/{jobId}/preview?stage=source|current&page=1` | Token-protected, no-store PNG preview |
 | `POST` | `/v1/jobs/{jobId}/fix` | Execute confirmed safe fix plan |
 | `GET` | `/v1/jobs/{jobId}/download` | Download the current candidate PDF |
 | `DELETE` | `/v1/jobs/{jobId}/artifacts` | Immediately delete source/intermediate/output bytes |
@@ -27,7 +28,12 @@ This protects unguessable task URLs but is not an account system. Tenant account
 ## Current fix actions
 
 - `bleed_and_crop`: executes only when the border classifier permits deterministic solid-color extension.
+- `trim_and_crop_marks`: adds a slug, explicit TrimBox and crop marks without generating or declaring bleed. This is the honest fallback for complex page borders.
 - `pdfx_candidate`: ICC conversion and PDF/X-4 candidate generation. Missing fonts require explicit substitution acknowledgement. It never returns independent PDF/X certification.
+
+The report includes `fixPlan[]` entries with `applicable`, `executable`, `safety` and `reason`. The API independently re-evaluates this plan before every mutation and returns `FIX_ACTION_UNSAFE` for a stale or unsafe client selection.
+
+Preview PNGs are bounded renders produced in the isolated PDF worker. They use the same task token as the report, return `Cache-Control: private, no-store`, expire with the job and are deleted with all other artifacts.
 
 ## State model
 

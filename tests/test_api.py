@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import httpx
+import pymupdf
 
 import print_preflight.api as api_module
 from print_preflight.service import PreflightService
@@ -25,9 +26,10 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         await self.client.aclose()
         self.temporary.cleanup()
 
-    async def _upload(self) -> dict:
-        source = Path(self.temporary.name) / "fixture.pdf"
-        make_sample(source)
+    async def _upload(self, source: Path | None = None) -> dict:
+        if source is None:
+            source = Path(self.temporary.name) / "fixture.pdf"
+            make_sample(source)
         response = await self.client.post(
             "/v1/jobs",
             files={"file": ("fixture.pdf", source.read_bytes(), "application/pdf")},
@@ -56,6 +58,15 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         codes = {issue["code"] for issue in report["preflight"]["issues"]}
         self.assertIn("IMAGE.LOW_EFFECTIVE_DPI", codes)
         self.assertNotIn("absolutePath", report["analysis"]["source"])
+        self.assertTrue(any(item["action"] == "bleed_and_crop" for item in report["fixPlan"]))
+
+        preview = await self.client.get(
+            f"/v1/jobs/{created['jobId']}/preview?stage=source&page=1",
+            headers=headers,
+        )
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.headers["content-type"], "image/png")
+        self.assertTrue(preview.content.startswith(b"\x89PNG\r\n\x1a\n"))
 
         fix_response = await self.client.post(
             f"/v1/jobs/{created['jobId']}/fix",
@@ -66,6 +77,13 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         fixed = fix_response.json()
         self.assertTrue(fixed["downloadAvailable"])
         self.assertEqual(fixed["report"]["validation"]["syntaxPassed"], True)
+
+        current_preview = await self.client.get(
+            f"/v1/jobs/{created['jobId']}/preview?stage=current&page=1",
+            headers=headers,
+        )
+        self.assertEqual(current_preview.status_code, 200, current_preview.text)
+        self.assertTrue(current_preview.content.startswith(b"\x89PNG\r\n\x1a\n"))
 
         download = await self.client.get(f"/v1/jobs/{created['jobId']}/download", headers=headers)
         self.assertEqual(download.status_code, 200)
@@ -100,6 +118,50 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"]["code"], "FONT_SUBSTITUTION_CONFIRMATION_REQUIRED")
+
+    async def test_complex_border_rejects_bleed_but_allows_honest_trim_repair(self) -> None:
+        source = Path(self.temporary.name) / "complex-border.pdf"
+        with pymupdf.open() as document:
+            page = document.new_page(width=300, height=420)
+            half_width = page.rect.width / 2
+            half_height = page.rect.height / 2
+            colors = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)]
+            rectangles = [
+                pymupdf.Rect(0, 0, half_width, half_height),
+                pymupdf.Rect(half_width, 0, page.rect.width, half_height),
+                pymupdf.Rect(0, half_height, half_width, page.rect.height),
+                pymupdf.Rect(half_width, half_height, page.rect.width, page.rect.height),
+            ]
+            for rectangle, color in zip(rectangles, colors, strict=True):
+                page.draw_rect(rectangle, color=color, fill=color)
+            document.save(source)
+
+        created = await self._upload(source)
+        headers = {"X-Job-Token": created["accessToken"]}
+        report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
+        plan = {item["action"]: item for item in report["fixPlan"]}
+        self.assertFalse(plan["bleed_and_crop"]["executable"])
+        self.assertTrue(plan["trim_and_crop_marks"]["executable"])
+
+        rejected = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/fix",
+            headers=headers,
+            json={"actions": ["bleed_and_crop"], "acknowledgeFontSubstitution": False},
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        self.assertEqual(rejected.json()["error"]["code"], "FIX_ACTION_UNSAFE")
+
+        repaired = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/fix",
+            headers=headers,
+            json={"actions": ["trim_and_crop_marks"], "acknowledgeFontSubstitution": False},
+        )
+        self.assertEqual(repaired.status_code, 200, repaired.text)
+        after_codes = {item["code"] for item in repaired.json()["report"]["afterPreflight"]["issues"]}
+        self.assertNotIn("PAGE.TRIMBOX_MISSING", after_codes)
+        self.assertIn("PAGE.BLEED_INSUFFICIENT", after_codes)
+        after_plan = {item["action"]: item for item in repaired.json()["report"]["fixPlan"]}
+        self.assertFalse(after_plan["trim_and_crop_marks"]["executable"])
 
     async def test_invalid_file_and_unknown_preset_are_rejected(self) -> None:
         invalid = await self.client.post(

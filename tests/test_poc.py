@@ -8,7 +8,13 @@ from pathlib import Path
 import pymupdf
 
 from print_preflight.analyzer import analyze_pdf
-from print_preflight.fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk, supports_pdfx4
+from print_preflight.fixer import (
+    add_bleed_and_crop_marks,
+    add_trim_and_crop_marks,
+    export_pdfx4_cmyk,
+    supports_pdfx4,
+)
+from print_preflight.preview import render_pdf_preview
 from print_preflight.profiles import resolve_cmyk_profile
 from print_preflight.rules import run_preflight
 from scripts.generate_samples import make_sample
@@ -56,6 +62,27 @@ class PreflightPocTest(unittest.TestCase):
             self.assertTrue(fixed["pages"][0]["trimBox"]["explicit"])
             self.assertTrue(fixed["pages"][0]["bleedBox"]["explicit"])
             self.assertAlmostEqual(min(fixed["pages"][0]["bleedMargins"].values()), 3.0, places=2)
+
+    def test_trim_only_repair_and_bounded_preview_do_not_claim_bleed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            trimmed = root / "trimmed.pdf"
+            preview = root / "preview.png"
+            with pymupdf.open() as document:
+                page = document.new_page(width=300, height=420)
+                page.draw_rect(page.rect, color=(0.2, 0.6, 0.8), fill=(0.2, 0.6, 0.8))
+                document.save(source)
+
+            add_trim_and_crop_marks(source, trimmed)
+            fixed = analyze_pdf(trimmed)
+            self.assertTrue(fixed["pages"][0]["trimBox"]["explicit"])
+            self.assertFalse(fixed["pages"][0]["bleedBox"]["explicit"])
+            self.assertIn("PAGE.BLEED_INSUFFICIENT", {item["code"] for item in run_preflight(fixed)["issues"]})
+
+            rendered = render_pdf_preview(trimmed, preview, max_edge=640)
+            self.assertTrue(preview.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertLessEqual(max(rendered["width"], rendered["height"]), 640)
 
     @unittest.skipUnless(
         shutil.which("gs") and PROFILE.exists() and supports_pdfx4(),
