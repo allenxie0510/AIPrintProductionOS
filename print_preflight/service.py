@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import math
+import re
 import secrets
 import shutil
 import subprocess
@@ -15,6 +17,8 @@ from .isolated import (
     add_trim_and_crop_marks_isolated,
     analyze_pdf_isolated,
     export_pdfx4_cmyk_isolated,
+    inspect_font_file_isolated,
+    replace_pdf_image_isolated,
     render_pdf_preview_isolated,
 )
 from .fixer import supports_pdfx4
@@ -27,6 +31,8 @@ from .rules import run_preflight
 MAX_UPLOAD_BYTES = int(os.environ.get("PRINT_MVP_MAX_UPLOAD_BYTES", 100 * 1024 * 1024))
 MAX_PAGES = int(os.environ.get("PRINT_MVP_MAX_PAGES", 20))
 FILE_TTL_SECONDS = int(os.environ.get("PRINT_MVP_FILE_TTL_SECONDS", 24 * 60 * 60))
+MAX_REPLACEMENT_IMAGE_BYTES = int(os.environ.get("PRINT_MVP_MAX_REPLACEMENT_IMAGE_BYTES", 50 * 1024 * 1024))
+MAX_FONT_BYTES = int(os.environ.get("PRINT_MVP_MAX_FONT_BYTES", 20 * 1024 * 1024))
 
 
 class MvpError(Exception):
@@ -121,6 +127,16 @@ class PreflightService:
             },
         ]
 
+    @staticmethod
+    def _action_summaries(actions: list[str]) -> list[str]:
+        labels = {
+            "bleed_and_crop": "已扩展安全纯色出血并添加裁切标记。",
+            "trim_and_crop_marks": "已设置明确裁切框并添加裁切标记；复杂出血仍需人工处理。",
+            "pdfx_candidate": "已生成 CMYK / PDF/X-4 候选并重新执行印前检查。",
+            "replace_image": "已在原版位置替换高分辨率图片并重新计算有效 PPI。",
+        }
+        return [labels[action] for action in actions if action in labels]
+
     def _preview_metadata(
         self,
         pdf_path: Path,
@@ -151,6 +167,138 @@ class PreflightService:
                 "page": page_number,
                 "reason": error.code,
             }
+
+    @staticmethod
+    def _base_pdf(job: dict[str, Any]) -> Path:
+        existing_output = Path(job["output_path"]) if job.get("output_path") else None
+        return existing_output if existing_output and existing_output.is_file() else Path(job["source_path"])
+
+    @staticmethod
+    def _normalized_font_name(value: str) -> str:
+        without_subset = re.sub(r"^[A-Z]{6}\+", "", value or "")
+        return re.sub(r"[^a-z0-9]", "", without_subset.lower())
+
+    @staticmethod
+    def _stream_asset(upload: BinaryIO, output: Path, *, maximum_bytes: int) -> int:
+        written = 0
+        with output.open("wb") as handle:
+            while chunk := upload.read(1024 * 1024):
+                written += len(chunk)
+                if written > maximum_bytes:
+                    handle.close()
+                    output.unlink(missing_ok=True)
+                    raise MvpError("ASSET_TOO_LARGE", f"Uploaded asset exceeds {maximum_bytes} bytes.", 413)
+                handle.write(chunk)
+        if written == 0:
+            output.unlink(missing_ok=True)
+            raise MvpError("ASSET_EMPTY", "Uploaded asset is empty.", 422)
+        return written
+
+    def _finalize_derivative(
+        self,
+        job: dict[str, Any],
+        report: dict[str, Any],
+        derivative: Path,
+        fix_event: dict[str, Any],
+    ) -> dict[str, Any]:
+        job_id = job["id"]
+        job_dir = self._job_dir(job_id)
+        candidate = job_dir / "print-ready-candidate.pdf"
+        self.store.update(job_id, status="validating")
+        after_analysis = analyze_pdf_isolated(derivative, max_pages=MAX_PAGES)
+        preset: PrintPreset = get_print_preset(job["preset_id"])
+        before_preflight = report.get("afterPreflight") or report["preflight"]
+        after_preflight = run_preflight(after_analysis, preset=preset)
+        if "pdfx_candidate" in fix_event.get("actions", []):
+            before_low_ppi = [
+                float((issue.get("evidence") or {}).get("dpi", preset.required_image_ppi))
+                for issue in before_preflight.get("issues", [])
+                if issue.get("code") == "IMAGE.LOW_EFFECTIVE_DPI"
+            ]
+            after_low_ppi = [
+                float((issue.get("evidence") or {}).get("dpi", preset.required_image_ppi))
+                for issue in after_preflight.get("issues", [])
+                if issue.get("code") == "IMAGE.LOW_EFFECTIVE_DPI"
+            ]
+            baseline_floor = min(before_low_ppi, default=float(preset.required_image_ppi))
+            if (
+                len(after_low_ppi) > len(before_low_ppi)
+                and min(after_low_ppi, default=baseline_floor) < baseline_floor * 0.9
+            ):
+                raise MvpError(
+                    "FIX_QUALITY_REGRESSION",
+                    "PDF/X conversion introduced additional lower-resolution raster objects. "
+                    "The previous file was preserved; re-export from the design tool or ask the printer for a target preset.",
+                    409,
+                )
+        resolved_by_action = {
+            "bleed_and_crop": {"PAGE.TRIMBOX_MISSING", "PAGE.BLEED_INSUFFICIENT"},
+            "trim_and_crop_marks": {"PAGE.TRIMBOX_MISSING"},
+            "pdfx_candidate": {"COLOR.RGB_USED", "FONT.NOT_EMBEDDED", "PDFX.NOT_DECLARED"},
+            "replace_image": {"IMAGE.LOW_EFFECTIVE_DPI"},
+        }
+        eligible_codes = {
+            code
+            for action in fix_event.get("actions", [])
+            for code in resolved_by_action.get(action, set())
+        }
+        target_xref = (fix_event.get("target") or {}).get("xref")
+
+        def still_present(before: dict[str, Any]) -> bool:
+            for current in after_preflight.get("issues", []):
+                if before.get("code") != current.get("code") or before.get("page") != current.get("page"):
+                    continue
+                if before.get("code") == "IMAGE.LOW_EFFECTIVE_DPI":
+                    before_xref = (before.get("evidence") or {}).get("xref")
+                    current_xref = (current.get("evidence") or {}).get("xref")
+                    if before_xref == current_xref:
+                        return True
+                    continue
+                if before.get("code") == "FONT.NOT_EMBEDDED":
+                    if before.get("message") == current.get("message"):
+                        return True
+                    continue
+                return True
+            return False
+
+        resolved_issues = []
+        for issue in before_preflight.get("issues", []):
+            if issue.get("code") not in eligible_codes:
+                continue
+            if issue.get("code") == "IMAGE.LOW_EFFECTIVE_DPI":
+                if (issue.get("evidence") or {}).get("xref") != target_xref:
+                    continue
+            if not still_present(issue):
+                resolved_issues.append(issue)
+        fix_event = {**fix_event, "resolvedIssues": resolved_issues}
+        validation = self._validate(derivative)
+        status = "ready" if after_preflight["status"] != "FAIL" and validation["syntaxPassed"] else "partial"
+        if derivative.resolve() != candidate.resolve():
+            shutil.copy2(derivative, candidate)
+        previous_history = (report.get("fix") or {}).get("history") or []
+        fix_record = {**fix_event, "history": [*previous_history, fix_event]}
+        previews = {
+            **(report.get("previews") or {}),
+            "current": self._preview_metadata(candidate, job_dir, stage="current"),
+        }
+        updated_report = {
+            **report,
+            "fix": fix_record,
+            "afterAnalysis": public_analysis(after_analysis, self.data_dir),
+            "afterPreflight": after_preflight,
+            "fixPlan": self._fix_plan(after_analysis, after_preflight),
+            "previews": previews,
+            "validation": validation,
+        }
+        self.store.update(
+            job_id,
+            status=status,
+            output_path=str(candidate),
+            fix_json=fix_record,
+            report_json=updated_report,
+            error_json=None,
+        )
+        return {**self.public_job(job_id), "report": updated_report}
 
     def create_job(self, upload: BinaryIO, filename: str | None, preset_id: str) -> dict[str, Any]:
         self.store.cleanup_expired()
@@ -279,17 +427,24 @@ class PreflightService:
         if {"bleed_and_crop", "trim_and_crop_marks"}.issubset(actions):
             raise MvpError("FIX_PLAN_INVALID", "Bleed extension and trim-only repair are mutually exclusive.", 422)
         unembedded = [font for font in analysis["document"]["fonts"] if not font["embedded"]]
-        if "pdfx_candidate" in actions and unembedded and not acknowledge_font_substitution:
+        provided_names = {
+            self._normalized_font_name(item.get("expectedName", ""))
+            for item in (report.get("providedFonts") or [])
+            if item.get("ready")
+        }
+        unprovided = [
+            font for font in unembedded
+            if self._normalized_font_name(font.get("name", "")) not in provided_names
+        ]
+        if "pdfx_candidate" in actions and unprovided and not acknowledge_font_substitution:
             raise MvpError(
                 "FONT_SUBSTITUTION_CONFIRMATION_REQUIRED",
                 "PDF/X candidate export may substitute missing fonts. Explicit confirmation is required.",
                 409,
             )
 
-        source = Path(job["source_path"])
         job_dir = self._job_dir(job_id)
-        existing_output = Path(job["output_path"]) if job.get("output_path") else None
-        working = existing_output if existing_output and existing_output.is_file() else source
+        working = self._base_pdf(job)
         stage_id = uuid4().hex[:10]
         fix_results: list[dict[str, Any]] = []
         self.store.update(job_id, status="fixing")
@@ -312,49 +467,29 @@ class PreflightService:
             if "pdfx_candidate" in actions:
                 candidate = job_dir / f"pdfx-{stage_id}.pdf"
                 profile = resolve_cmyk_profile()
-                result = export_pdfx4_cmyk_isolated(working, candidate, profile, job_dir)
+                fonts_dir = job_dir / "fonts"
+                result = export_pdfx4_cmyk_isolated(
+                    working,
+                    candidate,
+                    profile,
+                    job_dir,
+                    font_dir=fonts_dir if fonts_dir.is_dir() else None,
+                )
                 fix_results.append(public_analysis(result, self.data_dir))
                 working = candidate
-            candidate = job_dir / "print-ready-candidate.pdf"
-            if working.resolve() != candidate.resolve():
-                shutil.copy2(working, candidate)
-            working = candidate
-
-            self.store.update(job_id, status="validating")
-            after_analysis = analyze_pdf_isolated(working, max_pages=MAX_PAGES)
-            preset: PrintPreset = get_print_preset(job["preset_id"])
-            after_preflight = run_preflight(after_analysis, preset=preset)
-            validation = self._validate(working)
-            status = "ready" if after_preflight["status"] != "FAIL" and validation["syntaxPassed"] else "partial"
             fix_event = {
                 "actions": actions,
                 "acknowledgedFontSubstitution": acknowledge_font_substitution,
                 "results": fix_results,
+                "summary": self._action_summaries(actions),
             }
-            previous_history = (report.get("fix") or {}).get("history") or []
-            fix_record = {**fix_event, "history": [*previous_history, fix_event]}
-            previews = {
-                **(report.get("previews") or {}),
-                "current": self._preview_metadata(working, job_dir, stage="current"),
-            }
-            updated_report = {
-                **report,
-                "fix": fix_record,
-                "afterAnalysis": public_analysis(after_analysis, self.data_dir),
-                "afterPreflight": after_preflight,
-                "fixPlan": self._fix_plan(after_analysis, after_preflight),
-                "previews": previews,
-                "validation": validation,
-            }
+            return self._finalize_derivative(job, report, working, fix_event)
+        except MvpError as error:
             self.store.update(
                 job_id,
-                status=status,
-                output_path=str(working),
-                fix_json=fix_record,
-                report_json=updated_report,
+                status=job["status"],
+                error_json={"code": error.code, "message": error.message},
             )
-            return {**self.public_job(job_id), "report": updated_report}
-        except MvpError:
             raise
         except EngineProcessError as error:
             self.store.update(
@@ -370,6 +505,124 @@ class PreflightService:
                 error_json={"code": "FIX_FAILED", "message": str(error)},
             )
             raise MvpError("FIX_FAILED", str(error), 422) from error
+
+    def replace_image(
+        self,
+        job_id: str,
+        access_token: str,
+        upload: BinaryIO,
+        filename: str | None,
+        *,
+        xref: int,
+    ) -> dict[str, Any]:
+        job = self.require_job(job_id, access_token)
+        if job["status"] not in {"awaiting_decision", "partial", "ready"}:
+            raise MvpError("JOB_NOT_FIXABLE", "The job is not ready for an image replacement.", 409)
+        report = job["report"]
+        analysis = report.get("afterAnalysis") or report["analysis"]
+        placements = [item for item in analysis["document"]["images"] if int(item["xref"]) == xref]
+        if not placements:
+            raise MvpError("IMAGE_TARGET_NOT_FOUND", "The selected image is no longer present in the current PDF.", 409)
+        required_ppi = int((report.get("afterPreflight") or report["preflight"])["policy"]["requiredImagePpi"])
+        required_width = max(
+            math.ceil(item["pixelWidth"] * required_ppi / max(float(item["effectiveDpiX"]), 0.01))
+            for item in placements
+        )
+        required_height = max(
+            math.ceil(item["pixelHeight"] * required_ppi / max(float(item["effectiveDpiY"]), 0.01))
+            for item in placements
+        )
+
+        job_dir = self._job_dir(job_id)
+        assets_dir = job_dir / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        safe_suffix = Path(filename or "replacement.png").suffix.lower()
+        if safe_suffix not in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}:
+            raise MvpError("IMAGE_FORMAT_UNSUPPORTED", "Use PNG, JPEG, TIFF or WebP for replacement.", 415)
+        replacement = assets_dir / f"image-{xref}-{uuid4().hex[:10]}{safe_suffix}"
+        self._stream_asset(upload, replacement, maximum_bytes=MAX_REPLACEMENT_IMAGE_BYTES)
+        derivative = job_dir / f"image-replaced-{uuid4().hex[:10]}.pdf"
+        self.store.update(job_id, status="fixing")
+        try:
+            result = replace_pdf_image_isolated(self._base_pdf(job), derivative, replacement, xref)
+            if result["pixelWidth"] < required_width or result["pixelHeight"] < required_height:
+                derivative.unlink(missing_ok=True)
+                raise MvpError(
+                    "REPLACEMENT_IMAGE_TOO_SMALL",
+                    f"Replacement needs at least {required_width} × {required_height} pixels for this placement.",
+                    422,
+                )
+            fix_event = {
+                "actions": ["replace_image"],
+                "summary": self._action_summaries(["replace_image"]),
+                "target": {"xref": xref, "placements": len(placements)},
+                "results": [public_analysis(result, self.data_dir)],
+            }
+            return self._finalize_derivative(job, report, derivative, fix_event)
+        except MvpError:
+            self.store.update(job_id, status=job["status"])
+            raise
+        except EngineProcessError as error:
+            self.store.update(job_id, status=job["status"], error_json={"code": error.code, "message": error.message})
+            raise MvpError(error.code, error.message, 422) from error
+        except Exception as error:
+            self.store.update(
+                job_id,
+                status=job["status"],
+                error_json={"code": "IMAGE_REPLACEMENT_FAILED", "message": str(error)},
+            )
+            raise MvpError("IMAGE_REPLACEMENT_FAILED", str(error), 422) from error
+        finally:
+            replacement.unlink(missing_ok=True)
+
+    def upload_font(
+        self,
+        job_id: str,
+        access_token: str,
+        upload: BinaryIO,
+        filename: str | None,
+        *,
+        expected_name: str,
+    ) -> dict[str, Any]:
+        job = self.require_job(job_id, access_token)
+        if job["status"] not in {"awaiting_decision", "partial", "ready"}:
+            raise MvpError("JOB_NOT_FIXABLE", "The job is not ready for a font upload.", 409)
+        report = job["report"]
+        analysis = report.get("afterAnalysis") or report["analysis"]
+        missing_names = [font["name"] for font in analysis["document"]["fonts"] if not font["embedded"]]
+        requested = next(
+            (name for name in missing_names if self._normalized_font_name(name) == self._normalized_font_name(expected_name)),
+            None,
+        )
+        if requested is None:
+            raise MvpError("FONT_TARGET_NOT_FOUND", "The selected missing font is no longer present.", 409)
+        suffix = Path(filename or "font.ttf").suffix.lower()
+        if suffix not in {".ttf", ".otf"}:
+            raise MvpError("FONT_FORMAT_UNSUPPORTED", "Use a single-font TTF or OTF file.", 415)
+        fonts_dir = self._job_dir(job_id) / "fonts"
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+        font_path = fonts_dir / f"font-{uuid4().hex[:10]}{suffix}"
+        self._stream_asset(upload, font_path, maximum_bytes=MAX_FONT_BYTES)
+        try:
+            inspected = inspect_font_file_isolated(font_path)
+        except EngineProcessError as error:
+            font_path.unlink(missing_ok=True)
+            raise MvpError(error.code, error.message, 422) from error
+        if self._normalized_font_name(inspected["name"]) != self._normalized_font_name(requested):
+            font_path.unlink(missing_ok=True)
+            raise MvpError(
+                "FONT_NAME_MISMATCH",
+                f"Uploaded font is {inspected['name']}, but the PDF requests {requested}. Upload the original font file.",
+                422,
+            )
+        provided = [
+            item for item in (report.get("providedFonts") or [])
+            if self._normalized_font_name(item["expectedName"]) != self._normalized_font_name(requested)
+        ]
+        provided.append({"expectedName": requested, "fontName": inspected["name"], "ready": True})
+        updated_report = {**report, "providedFonts": provided}
+        self.store.update(job_id, report_json=updated_report, error_json=None)
+        return {**self.public_job(job_id), "report": updated_report}
 
     @staticmethod
     def _validate(pdf_path: Path) -> dict[str, Any]:

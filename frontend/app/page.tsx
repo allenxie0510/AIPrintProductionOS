@@ -28,6 +28,13 @@ type Report = {
     source?: { available: boolean; page: number; width?: number; height?: number };
     current?: { available: boolean; page: number; width?: number; height?: number };
   };
+  fix?: {
+    actions?: string[];
+    summary?: string[];
+    resolvedIssues?: Issue[];
+    history?: Array<{ actions: string[]; summary?: string[]; resolvedIssues?: Issue[] }>;
+  } | null;
+  providedFonts?: Array<{ expectedName: string; fontName: string; ready: boolean }>;
   validation?: { syntaxPassed: boolean; validator: string; pdfxState: string } | null;
 };
 
@@ -86,6 +93,47 @@ const apiErrorMessages: Record<string, string> = {
   PDF_COMPLEXITY_LIMIT_EXCEEDED: "这个 PDF 超过当前在线安全复杂度限制。请减少页面、对象或超大图片后重试。",
   ENGINE_PROCESS_FAILED: "PDF 引擎已安全终止，没有影响在线服务。请重新导出 PDF 后重试。",
   FIX_ACTION_UNSAFE: "所选修复不满足安全执行条件，文件没有被修改。请按修复计划选择可执行动作。",
+  FIX_QUALITY_REGRESSION: "本次转换会新增更低分辨率的栅格对象，因此已停止并保留上一版本。请从设计软件按正确页面尺寸重新导出，或向印厂索取目标预设。",
+  REPLACEMENT_IMAGE_TOO_SMALL: "这张替换图片仍然不够大。请选择像素尺寸更高的原图。",
+  IMAGE_FORMAT_UNSUPPORTED: "请上传 PNG、JPEG、TIFF 或 WebP 图片。",
+  FONT_NAME_MISMATCH: "字体名称与 PDF 请求的字体不一致。请上传原字体文件，或明确选择替代字体导出。",
+  FONT_FORMAT_UNSUPPORTED: "请上传单个 TTF 或 OTF 字体文件。",
+};
+
+function issueEvidence(issue: Issue) {
+  return issue.evidence && !Array.isArray(issue.evidence) ? issue.evidence : {};
+}
+
+function issueKey(issue: Issue) {
+  const evidence = issueEvidence(issue);
+  return [issue.code, issue.page ?? 0, evidence.xref ?? "", issue.message].join(":");
+}
+
+function fontNameFromIssue(issue: Issue) {
+  return issue.message.split(": ", 2)[1] || issue.message;
+}
+
+function normalizedFontName(value: string) {
+  return value.replace(/^[A-Z]{6}\+/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function sameIssue(left: Issue, right: Issue) {
+  if (left.code !== right.code || left.page !== right.page) return false;
+  const leftEvidence = issueEvidence(left);
+  const rightEvidence = issueEvidence(right);
+  if (left.code === "IMAGE.LOW_EFFECTIVE_DPI") {
+    return leftEvidence.xref === rightEvidence.xref;
+  }
+  return left.message === right.message || left.code === right.code;
+}
+
+const resolvedDescriptions: Record<string, string> = {
+  "PAGE.TRIMBOX_MISSING": "已写入明确裁切框，并在外围工作区添加裁切标记。",
+  "PAGE.BLEED_INSUFFICIENT": "已补足可安全延展的纯色出血，并重新检查页面边缘。",
+  "COLOR.RGB_USED": "已按目标 ICC 转换颜色并生成 CMYK 候选文件。",
+  "PDFX.NOT_DECLARED": "已生成 PDF/X-4 候选和 OutputIntent，仍需印厂最终验证。",
+  "FONT.NOT_EMBEDDED": "字体已在候选文件中嵌入；请用左侧预览确认字形与换行。",
+  "IMAGE.LOW_EFFECTIVE_DPI": "已原位替换高分辨率图片，并按实际落版尺寸重新计算 PPI。",
 };
 
 function apiErrorMessage(error: ApiError | undefined, fallback: string) {
@@ -144,10 +192,11 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
-  const [bleedFix, setBleedFix] = useState(false);
-  const [trimCropFix, setTrimCropFix] = useState(false);
-  const [pdfxFix, setPdfxFix] = useState(false);
-  const [fontAck, setFontAck] = useState(false);
+  const [fixingIssue, setFixingIssue] = useState("");
+  const [fontConsent, setFontConsent] = useState<Record<string, boolean>>({});
+  const [lastSuccess, setLastSuccess] = useState("");
+  const [deliveryMode, setDeliveryMode] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState("");
   const [fixedPreviewUrl, setFixedPreviewUrl] = useState("");
@@ -155,9 +204,13 @@ export default function Home() {
 
   const activePreflight = report?.afterPreflight ?? report?.preflight;
   const issues = activePreflight?.issues ?? [];
-  const hasFontIssue = issues.some((item) => item.code === "FONT.NOT_EMBEDDED");
-  const hasBleedIssue = issues.some((item) => item.code === "PAGE.BLEED_INSUFFICIENT");
-  const phase = !job ? "upload" : report?.afterPreflight ? "result" : "diagnosis";
+  const hasRepairs = Boolean(report?.afterPreflight);
+  const resolvedIssues = (report?.fix?.history ?? []).flatMap((event) => event.resolvedIssues ?? []);
+  const resolvedIssueKeys = new Set(resolvedIssues.map(issueKey));
+  const displayedIssues = hasRepairs
+    ? [...resolvedIssues.filter((issue, index, all) => all.findIndex((item) => issueKey(item) === issueKey(issue)) === index), ...issues]
+    : issues;
+  const phase = !job ? "upload" : deliveryMode ? "result" : hasRepairs ? "repair" : "diagnosis";
   const selectedPreset = useMemo(() => presets.find((item) => item.id === presetId)!, [presetId]);
   const localPdfUrl = useMemo(() => file ? URL.createObjectURL(file) : "", [file]);
   const fixPlan = report?.fixPlan ?? [];
@@ -244,10 +297,6 @@ export default function Home() {
       if (!createdReport) throw new Error("诊断超时。任务仍会按生命周期自动清理，请稍后重新上传。");
       setJob(created);
       setReport(createdReport);
-      const createdPlan = createdReport.fixPlan ?? [];
-      setBleedFix(Boolean(createdPlan.find((item) => item.action === "bleed_and_crop")?.executable));
-      setTrimCropFix(Boolean(createdPlan.find((item) => item.action === "trim_and_crop_marks")?.executable));
-      setPdfxFix(Boolean(createdPlan.find((item) => item.action === "pdfx_candidate")?.executable));
       await loadPreview(created, "source");
     } catch (cause) {
       setError(cause instanceof TypeError
@@ -258,34 +307,91 @@ export default function Home() {
     }
   }
 
-  async function applyFixes() {
+  async function applySingleFix(action: FixAction["action"], key: string, acknowledgeFontSubstitution = false) {
     if (!job) return;
-    const actions = [
-      bleedFix && bleedAction?.executable && "bleed_and_crop",
-      trimCropFix && trimAction?.executable && "trim_and_crop_marks",
-      pdfxFix && pdfxAction?.executable && "pdfx_candidate",
-    ].filter(Boolean);
-    if (!actions.length) {
-      setError("请至少选择一项修复，或保留当前诊断报告。");
-      return;
-    }
     setBusy(true);
+    setFixingIssue(key);
     setError("");
+    setLastSuccess("");
     try {
       const response = await fetch(`${API_BASE}/v1/jobs/${job.jobId}/fix`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Job-Token": job.accessToken },
-        body: JSON.stringify({ actions, acknowledgeFontSubstitution: fontAck }),
+        body: JSON.stringify({ actions: [action], acknowledgeFontSubstitution }),
       });
       const payload = await jsonPayload(response);
       if (!response.ok) throw new Error(apiErrorMessage(payload.error, "修复执行失败。"));
       setJob((current) => current ? { ...current, ...payload } : current);
-      setReport(payload.report as Report);
-      await Promise.all([loadPreview(job, "source"), loadPreview(job, "current")]);
+      const nextReport = payload.report as Report;
+      setReport(nextReport);
+      setLastSuccess(nextReport.fix?.summary?.join(" ") || "此项已完成并重新检查。 ");
+      await loadPreview(job, "current");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "修复执行失败。");
     } finally {
       setBusy(false);
+      setFixingIssue("");
+    }
+  }
+
+  async function replaceImage(issue: Issue, replacement: File | null) {
+    if (!job || !replacement) return;
+    const evidence = issueEvidence(issue);
+    const key = issueKey(issue);
+    setBusy(true);
+    setFixingIssue(key);
+    setError("");
+    setLastSuccess("");
+    try {
+      const body = new FormData();
+      body.append("file", replacement);
+      body.append("xref", String(evidence.xref));
+      const response = await fetch(`${API_BASE}/v1/jobs/${job.jobId}/assets/image-replacement`, {
+        method: "POST",
+        headers: { "X-Job-Token": job.accessToken },
+        body,
+      });
+      const payload = await jsonPayload(response);
+      if (!response.ok) throw new Error(apiErrorMessage(payload.error, "图片替换失败。"));
+      setJob((current) => current ? { ...current, ...payload } : current);
+      const nextReport = payload.report as Report;
+      setReport(nextReport);
+      setLastSuccess(nextReport.fix?.summary?.join(" ") || "图片已替换并重新检查有效 PPI。");
+      await loadPreview(job, "current");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "图片替换失败。");
+    } finally {
+      setBusy(false);
+      setFixingIssue("");
+    }
+  }
+
+  async function uploadFont(issue: Issue, fontFile: File | null) {
+    if (!job || !fontFile) return;
+    const key = issueKey(issue);
+    const expectedName = fontNameFromIssue(issue);
+    setBusy(true);
+    setFixingIssue(key);
+    setError("");
+    setLastSuccess("");
+    try {
+      const body = new FormData();
+      body.append("file", fontFile);
+      body.append("expectedName", expectedName);
+      const response = await fetch(`${API_BASE}/v1/jobs/${job.jobId}/assets/font`, {
+        method: "POST",
+        headers: { "X-Job-Token": job.accessToken },
+        body,
+      });
+      const payload = await jsonPayload(response);
+      if (!response.ok) throw new Error(apiErrorMessage(payload.error, "字体上传失败。"));
+      setReport(payload.report as Report);
+      setLastSuccess(`原字体 ${expectedName} 已验证，执行 PDF/X 转换时会优先使用它。`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "字体上传失败。");
+    } finally {
+      setBusy(false);
+      setFixingIssue("");
     }
   }
 
@@ -330,6 +436,11 @@ export default function Home() {
       setFile(null);
       setSourcePreviewUrl("");
       setFixedPreviewUrl("");
+      setFontConsent({});
+      setFixingIssue("");
+      setLastSuccess("");
+      setDeliveryMode(false);
+      setCompareMode(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "文件删除失败。");
     } finally {
@@ -374,10 +485,11 @@ export default function Home() {
     setFile(null);
     setError("");
     setFeedbackSent(false);
-    setFontAck(false);
-    setBleedFix(false);
-    setTrimCropFix(false);
-    setPdfxFix(false);
+    setFontConsent({});
+    setFixingIssue("");
+    setLastSuccess("");
+    setDeliveryMode(false);
+    setCompareMode(false);
     setSourcePreviewUrl("");
     setFixedPreviewUrl("");
   }
@@ -401,14 +513,20 @@ export default function Home() {
             <div className="promise-row">
               <span>不伪造 300 PPI</span><span>不静默替换字体</span><span>不永久保存文件</span>
             </div>
-          </> : report?.afterPreflight && sourcePreviewUrl && fixedPreviewUrl ? (
-            <BeforeAfterComparison before={sourcePreviewUrl} after={fixedPreviewUrl} position={comparePosition} onChange={setComparePosition} />
+          </> : report?.afterPreflight && sourcePreviewUrl && fixedPreviewUrl && compareMode ? (
+            <div>
+              <BeforeAfterComparison before={sourcePreviewUrl} after={fixedPreviewUrl} position={comparePosition} onChange={setComparePosition} />
+              <button className="preview-toggle" onClick={() => setCompareMode(false)}>返回当前修复版</button>
+            </div>
           ) : (
             <div className="preview-card">
-              <div className="preview-heading"><span>{report ? "原始文件" : "待诊断文件"}</span><span>第 1 页</span></div>
+              <div className="preview-heading">
+                <span>{fixedPreviewUrl ? "当前修复版本" : report ? "原始文件" : "待诊断文件"}</span>
+                {fixedPreviewUrl && sourcePreviewUrl ? <button onClick={() => setCompareMode(true)}>对比原稿</button> : <span>第 1 页</span>}
+              </div>
               <div className="pdf-frame">
-                {sourcePreviewUrl
-                  ? <img src={sourcePreviewUrl} alt="上传 PDF 第一页预览" />
+                {fixedPreviewUrl || sourcePreviewUrl
+                  ? <img src={fixedPreviewUrl || sourcePreviewUrl} alt="当前 PDF 第一页实际预览" />
                   : <object data={localPdfUrl} type="application/pdf" aria-label="上传 PDF 预览"><p>浏览器无法显示 PDF 预览。</p></object>}
                 {busy && <div className="preview-processing"><span />正在隔离解析 PDF…</div>}
               </div>
@@ -420,7 +538,7 @@ export default function Home() {
         <div className="workspace">
           <div className="steps" aria-label="处理进度">
             {["上传", "诊断", "修复", "交付"].map((label, index) => {
-              const active = phase === "upload" ? 0 : phase === "diagnosis" ? 1 : 3;
+              const active = phase === "upload" ? 0 : phase === "diagnosis" ? 1 : phase === "repair" ? 2 : 3;
               return <div className={index <= active ? "step active" : "step"} key={label}><b>{index + 1}</b><span>{label}</span></div>;
             })}
           </div>
@@ -453,28 +571,55 @@ export default function Home() {
             </div>
           )}
 
-          {phase === "diagnosis" && report && job && (
+          {(phase === "diagnosis" || phase === "repair") && report && job && (
             <div className="diagnosis-panel">
               <div className="score-row">
-                <div className="score"><span>{report.preflight.productionScore}</span><small>印前准备度</small></div>
-                <div><p className="eyebrow">诊断完成</p><h2>{job.fileName}</h2><p>{report.analysis.source.pageCount} 页 · {formatBytes(report.analysis.source.bytes)} · {selectedPreset.label}</p></div>
+                <div className="score"><span>{activePreflight?.productionScore ?? report.preflight.productionScore}</span><small>印前准备度</small></div>
+                <div><p className="eyebrow">{hasRepairs ? "逐项修复" : "诊断完成"}</p><h2>{job.fileName}</h2><p>{report.analysis.source.pageCount} 页 · {formatBytes(report.analysis.source.bytes)} · {selectedPreset.label}</p></div>
               </div>
-              <div className="issue-list">
-                {report.preflight.issues.map((issue) => (
-                  <article className="issue" key={`${issue.code}-${issue.page ?? 0}-${JSON.stringify(issue.evidence)}`}>
-                    <span className={`severity ${issue.severity.toLowerCase()}`}>{issue.severity}</span>
-                    <div><h3>{issueNames[issue.code] ?? issue.code}</h3><p>{issue.message}</p><small>规则 {issue.ruleVersion} · {Math.round(issue.confidence * 100)}% 置信度 · {issue.fix.safety}</small></div>
-                  </article>
-                ))}
+              {lastSuccess && <div className="success-banner" role="status"><b>✓</b><span><strong>修复完成</strong>{lastSuccess}</span></div>}
+              <div className="repair-intro"><strong>按问题逐项处理</strong><span>每次只修改一个目标，完成后立即复检并更新左侧实际预览。</span></div>
+              <div className="issue-list repair-list">
+                {displayedIssues.map((issue) => {
+                  const key = issueKey(issue);
+                  const resolved = resolvedIssueKeys.has(key) && !issues.some((current) => sameIssue(issue, current));
+                  const evidence = issueEvidence(issue);
+                  const isWorking = fixingIssue === key;
+                  const fontName = fontNameFromIssue(issue);
+                  const exactFontReady = Boolean(report.providedFonts?.some((item) => normalizedFontName(item.expectedName) === normalizedFontName(fontName) && item.ready));
+                  const missingFontIssues = issues.filter((item) => item.code === "FONT.NOT_EMBEDDED");
+                  const allMissingFontsProvided = missingFontIssues.every((item) => report.providedFonts?.some(
+                    (provided) => normalizedFontName(provided.expectedName) === normalizedFontName(fontNameFromIssue(item)) && provided.ready,
+                  ));
+                  const needsFontConfirmation = missingFontIssues.length > 0 && !allMissingFontsProvided;
+                  const consented = Boolean(fontConsent[key]);
+                  return (
+                    <article className={`repair-task ${resolved ? "resolved" : ""}`} key={key}>
+                      <div className="repair-task-head">
+                        <span className={resolved ? "task-state done" : `severity ${issue.severity.toLowerCase()}`}>{resolved ? "DONE" : issue.severity}</span>
+                        <div><h3>{issueNames[issue.code] ?? issue.code}</h3><p>{resolved ? resolvedDescriptions[issue.code] : issue.message}</p></div>
+                      </div>
+                      {!resolved && <div className="issue-action">
+                        {issue.code === "PAGE.TRIMBOX_MISSING" && trimAction?.executable && <button disabled={busy} onClick={() => applySingleFix("trim_and_crop_marks", key)}>{isWorking ? "正在设置…" : "设置裁切框"}</button>}
+                        {issue.code === "PAGE.BLEED_INSUFFICIENT" && bleedAction?.executable && <button disabled={busy} onClick={() => applySingleFix("bleed_and_crop", key)}>{isWorking ? "正在补出血…" : "安全补足出血"}</button>}
+                        {issue.code === "PAGE.BLEED_INSUFFICIENT" && !bleedAction?.executable && <div className="manual-guidance"><b>需要回设计软件处理</b><span>将贴边背景或图片向裁切线外延展至少 3 mm；系统不会生成原设计中不存在的画面。</span></div>}
+                        {issue.code === "IMAGE.LOW_EFFECTIVE_DPI" && <label className="asset-upload"><input type="file" accept="image/png,image/jpeg,image/tiff,image/webp,.png,.jpg,.jpeg,.tif,.tiff,.webp" disabled={busy} onChange={(event) => replaceImage(issue, event.target.files?.[0] ?? null)} /><span>{isWorking ? "正在替换并复检…" : "上传高分辨率原图"}</span><small>保持当前位置和尺寸，仅替换图片对象 · 当前 {String(evidence.dpi ?? "-")} PPI</small></label>}
+                        {issue.code === "FONT.NOT_EMBEDDED" && <>
+                          <label className="asset-upload"><input type="file" accept=".ttf,.otf,font/ttf,font/otf" disabled={busy} onChange={(event) => uploadFont(issue, event.target.files?.[0] ?? null)} /><span>{exactFontReady ? `原字体 ${fontName} 已就绪` : "上传原字体 TTF / OTF"}</span><small>系统会校验字体内部名称，名称不符不会使用。</small></label>
+                          {!exactFontReady && <label className="inline-confirm"><input type="checkbox" checked={consented} onChange={(event) => setFontConsent((current) => ({ ...current, [key]: event.target.checked }))} /><span>没有原字体，允许候选导出使用替代字体；我会检查左侧字形与换行。</span></label>}
+                          <button disabled={busy || (!exactFontReady && !consented) || !pdfxAction?.executable} onClick={() => applySingleFix("pdfx_candidate", key, !exactFontReady && consented)}>{isWorking ? "正在嵌入并复检…" : "嵌入字体并生成候选"}</button>
+                        </>}
+                        {(issue.code === "COLOR.RGB_USED" || issue.code === "PDFX.NOT_DECLARED") && <>
+                          {needsFontConfirmation && <label className="inline-confirm"><input type="checkbox" checked={consented} onChange={(event) => setFontConsent((current) => ({ ...current, [key]: event.target.checked }))} /><span>当前仍缺字体，允许候选导出使用替代字体，并检查左侧预览。</span></label>}
+                          <button disabled={busy || !pdfxAction?.executable || (needsFontConfirmation && !consented)} onClick={() => applySingleFix("pdfx_candidate", key, needsFontConfirmation && consented)}>{isWorking ? "正在转换并复检…" : "转换 CMYK / PDF/X-4"}</button>
+                        </>}
+                        <small className="rule-meta">规则 {issue.ruleVersion} · {Math.round(issue.confidence * 100)}% 置信度</small>
+                      </div>}
+                    </article>
+                  );
+                })}
               </div>
-              <div className="fix-plan">
-                <h3>修复计划</h3>
-                {hasBleedIssue && bleedAction && <label className={!bleedAction.executable ? "unavailable-choice" : ""}><input type="checkbox" disabled={!bleedAction.executable} checked={bleedFix && bleedAction.executable} onChange={(event) => setBleedFix(event.target.checked)} /><span><strong>{bleedAction.label}</strong><small>{bleedAction.reason}</small></span></label>}
-                {trimAction?.applicable && <label><input type="checkbox" checked={trimCropFix} onChange={(event) => setTrimCropFix(event.target.checked)} /><span><strong>{trimAction.label}</strong><small>{trimAction.reason}</small></span></label>}
-                {pdfxAction?.applicable && <label className={!pdfxAction.executable ? "unavailable-choice" : ""}><input type="checkbox" disabled={!pdfxAction.executable} checked={pdfxFix && pdfxAction.executable} onChange={(event) => setPdfxFix(event.target.checked)} /><span><strong>{pdfxAction.label}</strong><small>{pdfxAction.reason}</small></span></label>}
-                {pdfxFix && hasFontIssue && <label className="warning-choice"><input type="checkbox" checked={fontAck} onChange={(event) => setFontAck(event.target.checked)} /><span><strong>我确认本次候选导出可能使用替代字体</strong><small>当前缺少原字体。结果必须放大检查，不会被标记为无风险。</small></span></label>}
-              </div>
-              <button className="primary" disabled={busy || (pdfxFix && hasFontIssue && !fontAck)} onClick={applyFixes}>{busy ? "正在生成派生文件并复检…" : "执行已确认的修复"}<span>→</span></button>
+              {job.downloadAvailable && <button className="primary" disabled={busy} onClick={() => setDeliveryMode(true)}>完成修复，查看交付结果<span>→</span></button>}
               <button className="text-button" onClick={restart}>删除当前文件并换一个</button>
             </div>
           )}

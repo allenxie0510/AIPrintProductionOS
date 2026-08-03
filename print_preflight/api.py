@@ -129,6 +129,44 @@ def fix_job(
     )
 
 
+@app.post("/v1/jobs/{job_id}/assets/image-replacement")
+def replace_image(
+    job_id: str,
+    file: Annotated[UploadFile, File(description="High-resolution replacement image")],
+    xref: Annotated[int, Form()],
+    access_token: Annotated[str, Header(alias="X-Job-Token")],
+) -> dict:
+    try:
+        return service.replace_image(
+            job_id,
+            access_token,
+            file.file,
+            file.filename,
+            xref=xref,
+        )
+    finally:
+        file.file.close()
+
+
+@app.post("/v1/jobs/{job_id}/assets/font")
+def upload_font(
+    job_id: str,
+    file: Annotated[UploadFile, File(description="Original TTF or OTF font")],
+    expectedName: Annotated[str, Form()],
+    access_token: Annotated[str, Header(alias="X-Job-Token")],
+) -> dict:
+    try:
+        return service.upload_font(
+            job_id,
+            access_token,
+            file.file,
+            file.filename,
+            expected_name=expectedName,
+        )
+    finally:
+        file.file.close()
+
+
 @app.get("/v1/jobs/{job_id}/download")
 def download(job_id: str, access_token: Annotated[str, Header(alias="X-Job-Token")]) -> FileResponse:
     output, name = service.download_path(job_id, access_token)

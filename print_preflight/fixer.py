@@ -7,14 +7,70 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pymupdf
+from PIL import Image
 from pypdf import PdfReader, PdfWriter, Transformation
-from pypdf.generic import RectangleObject
+from pypdf.generic import NameObject, RectangleObject
 from reportlab.pdfgen import canvas
 
 from .units import PT_PER_MM
 
 
 MIN_GHOSTSCRIPT_PDFX4 = (10, 7)
+MAX_REPLACEMENT_IMAGE_PIXELS = 50_000_000
+
+
+def inspect_font_file(font_file: str | Path) -> dict[str, Any]:
+    source = Path(font_file).resolve()
+    signature = source.read_bytes()[:4]
+    if signature not in {b"OTTO", b"\x00\x01\x00\x00", b"true"}:
+        raise ValueError("Only valid single-font TTF or OTF files are supported.")
+    font = pymupdf.Font(fontfile=str(source))
+    return {
+        "name": font.name,
+        "glyphCount": font.glyph_count,
+        "isBold": bool(font.is_bold),
+        "isItalic": bool(font.is_italic),
+    }
+
+
+def replace_pdf_image(
+    input_pdf: str | Path,
+    output_pdf: str | Path,
+    image_file: str | Path,
+    xref: int,
+) -> dict[str, Any]:
+    replacement = Path(image_file).resolve()
+    with Image.open(replacement) as image:
+        image.verify()
+    with Image.open(replacement) as image:
+        width, height = image.size
+        image_format = image.format
+    if width <= 0 or height <= 0 or width * height > MAX_REPLACEMENT_IMAGE_PIXELS:
+        raise ValueError("Replacement image exceeds the safe 50 megapixel limit.")
+
+    source = Path(input_pdf).resolve()
+    output = Path(output_pdf).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with pymupdf.open(source) as document:
+        page_numbers = [
+            page.number + 1
+            for page in document
+            if any(int(item[0]) == xref for item in page.get_images(full=True))
+        ]
+        if not page_numbers:
+            raise ValueError(f"Image object {xref} is not present in the current PDF.")
+        document[page_numbers[0] - 1].replace_image(xref, filename=str(replacement))
+        document.save(output, garbage=4, deflate=True)
+    return {
+        "strategy": "replace_image_source",
+        "xref": xref,
+        "pages": page_numbers,
+        "pixelWidth": width,
+        "pixelHeight": height,
+        "format": image_format,
+        "output": str(output),
+    }
 
 
 def ghostscript_version(executable: str | None = None) -> tuple[int, ...] | None:
@@ -62,6 +118,20 @@ def _marks_overlay(width: float, height: float, trim: tuple[float, float, float,
     return stream.getvalue()
 
 
+def _marks_overlay_page(
+    width: float,
+    height: float,
+    trim: tuple[float, float, float, float],
+    bleed_pt: float,
+    rgb: tuple[int, int, int] | None,
+):
+    page = PdfReader(io.BytesIO(_marks_overlay(width, height, trim, bleed_pt, rgb))).pages[0]
+    resources = page.get("/Resources")
+    if resources and NameObject("/Font") in resources:
+        del resources[NameObject("/Font")]
+    return page
+
+
 def add_trim_and_crop_marks(
     input_pdf: str | Path,
     output_pdf: str | Path,
@@ -79,9 +149,9 @@ def add_trim_and_crop_marks(
         output_width = source_width + 2 * slug_pt
         output_height = source_height + 2 * slug_pt
         trim = (slug_pt, slug_pt, slug_pt + source_width, slug_pt + source_height)
-        overlay_pdf = PdfReader(io.BytesIO(_marks_overlay(output_width, output_height, trim, 0.0, None)))
+        overlay_page = _marks_overlay_page(output_width, output_height, trim, 0.0, None)
         target = writer.add_blank_page(width=output_width, height=output_height)
-        target.merge_page(overlay_pdf.pages[0])
+        target.merge_page(overlay_page)
         tx = slug_pt - float(source_page.mediabox.left)
         ty = slug_pt - float(source_page.mediabox.bottom)
         target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
@@ -123,9 +193,9 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
         output_height = source_height + 2 * margin
         trim = (margin, margin, margin + source_width, margin + source_height)
 
-        overlay_pdf = PdfReader(io.BytesIO(_marks_overlay(output_width, output_height, trim, bleed_pt, rgb)))
+        overlay_page = _marks_overlay_page(output_width, output_height, trim, bleed_pt, rgb)
         target = writer.add_blank_page(width=output_width, height=output_height)
-        target.merge_page(overlay_pdf.pages[0])
+        target.merge_page(overlay_page)
         tx = margin - float(source_page.mediabox.left)
         ty = margin - float(source_page.mediabox.bottom)
         target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
@@ -178,7 +248,7 @@ def _pdfx_definition(profile: Path, title: str) -> str:
 
 
 def export_pdfx4_cmyk(input_pdf: str | Path, output_pdf: str | Path, cmyk_profile: str | Path,
-                      work_dir: str | Path) -> dict[str, Any]:
+                      work_dir: str | Path, *, font_dir: str | Path | None = None) -> dict[str, Any]:
     gs = shutil.which("gs")
     if not gs:
         raise RuntimeError("Ghostscript is required for this POC step")
@@ -208,15 +278,21 @@ def export_pdfx4_cmyk(input_pdf: str | Path, output_pdf: str | Path, cmyk_profil
         "-dEmbedSubstituteFonts=true",
         "-dSubsetFonts=true",
         "-dDetectDuplicateImages=true",
+        "-dDownsampleColorImages=false",
+        "-dDownsampleGrayImages=false",
+        "-dDownsampleMonoImages=false",
         "-sColorConversionStrategy=CMYK",
         "-sBlendConversionStrategy=Managed",
         "-sDEVICE=pdfwrite",
         f"-sOutputICCProfile={profile}",
         f"--permit-file-read={profile}",
         f"-sOutputFile={output}",
-        str(definition.resolve()),
-        str(Path(input_pdf).resolve()),
     ]
+    if font_dir:
+        fonts = Path(font_dir).resolve()
+        if fonts.is_dir():
+            command.extend([f"-sFONTPATH={fonts}", f"--permit-file-read={fonts}/"])
+    command.extend([str(definition.resolve()), str(Path(input_pdf).resolve())])
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"Ghostscript failed ({completed.returncode}): {completed.stderr or completed.stdout}")
