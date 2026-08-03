@@ -22,7 +22,9 @@ RUN curl --fail --location --retry 3 \
     && cd "ghostscript-${GHOSTSCRIPT_VERSION}" \
     && ./configure --prefix=/usr/local --without-x --disable-gtk \
     && make -j2 \
-    && make install
+    && make install \
+    && install -d /usr/local/share/ghostscript/iccprofiles \
+    && install -m 644 iccprofiles/*.icc /usr/local/share/ghostscript/iccprofiles/
 
 FROM python:3.12-slim-bookworm AS runtime
 
