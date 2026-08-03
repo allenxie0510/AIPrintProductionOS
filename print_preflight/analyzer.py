@@ -154,7 +154,7 @@ def _border_classification(page: pymupdf.Page) -> dict[str, Any]:
         safety = "auto"
     else:
         strategy = "content_aware_or_manual"
-        safety = "review"
+        safety = "confirm"
     return {
         "sampledRgb": list(median),
         "channelStdDev": list(stddev),

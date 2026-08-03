@@ -1,5 +1,9 @@
 {
-  "engineVersion": "0.1-poc",
+  "engineVersion": "0.2.0-alpha",
+  "ruleSet": {
+    "ruleSetId": "core-preflight",
+    "version": "0.2.0-alpha"
+  },
   "status": "FAIL",
   "productionScore": 82,
   "summary": {
@@ -8,13 +12,29 @@
     "info": 0
   },
   "policy": {
+    "requiredImagePpi": 300,
     "requiredImageDpi": 300,
-    "requiredBleedMm": 3.0
+    "requiredBleedMm": 3.0,
+    "printPreset": {
+      "presetId": "designer-standard-poc",
+      "version": "0.1.0",
+      "label": "Designer standard print (POC)",
+      "productType": "small-format-commercial-print",
+      "requiredImagePpi": 300,
+      "bleedMm": 3.0,
+      "targetPdfx": "PDF/X-4 candidate",
+      "colorPolicy": "target-icc-required",
+      "status": "poc-only"
+    },
+    "runtimeOverrides": {}
   },
   "issues": [
     {
       "code": "IMAGE.LOW_EFFECTIVE_DPI",
+      "ruleId": "IMAGE.LOW_EFFECTIVE_DPI",
+      "ruleVersion": "1.1.0",
       "severity": "FAIL",
+      "confidence": 1.0,
       "page": 1,
       "message": "Placed image effective DPI is 84.67, below 300.",
       "evidence": {
@@ -24,8 +44,52 @@
       },
       "fix": {
         "mode": "super_resolution_or_replace_source",
-        "safety": "review_required"
+        "safety": "confirm"
       }
+    }
+  ],
+  "ruleExecutions": [
+    {
+      "ruleId": "PDF.ENCRYPTED",
+      "ruleVersion": "1.0.0",
+      "outcome": "PASS",
+      "issueCount": 0
+    },
+    {
+      "ruleId": "COLOR.RGB_USED",
+      "ruleVersion": "1.0.0",
+      "outcome": "PASS",
+      "issueCount": 0
+    },
+    {
+      "ruleId": "FONT.NOT_EMBEDDED",
+      "ruleVersion": "1.1.0",
+      "outcome": "PASS",
+      "issueCount": 0
+    },
+    {
+      "ruleId": "IMAGE.LOW_EFFECTIVE_DPI",
+      "ruleVersion": "1.1.0",
+      "outcome": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "ruleId": "PAGE.TRIMBOX_MISSING",
+      "ruleVersion": "1.0.0",
+      "outcome": "PASS",
+      "issueCount": 0
+    },
+    {
+      "ruleId": "PAGE.BLEED_INSUFFICIENT",
+      "ruleVersion": "1.1.0",
+      "outcome": "PASS",
+      "issueCount": 0
+    },
+    {
+      "ruleId": "PDFX.NOT_DECLARED",
+      "ruleVersion": "1.1.0",
+      "outcome": "PASS",
+      "issueCount": 0
     }
   ],
   "scoreDisclaimer": "POC heuristic score; not a print guarantee or industry certification."

@@ -98,7 +98,7 @@
       "warning": "PDF/X declaration is a candidate until independently validated against the target print condition."
     }
   },
-  "elapsedSeconds": 0.714,
+  "elapsedSeconds": 0.673,
   "result": "PASS",
   "importantBoundary": "Low image DPI intentionally remains unresolved; metadata or resampling alone cannot restore source detail."
 }

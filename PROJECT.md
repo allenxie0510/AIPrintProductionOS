@@ -1,62 +1,106 @@
-# Project Memory
+# AI Print Production OS — Project Memory
 
-## Product
-
-AI Print Production OS 是一个 PDF-first 的印前分析、规则决策、受控修复与审计平台。
+- Version: 1.1.0-alpha
+- Status: Active Alpha development
+- Strategy: PDF first
+- Last updated: 2026-08-03
 
 ## Mission
 
-让非印前专家也能知道文件为什么不能安全生产、哪些问题能自动修复、哪些必须人工确认，并为每次转换保留可追溯证据。
+把现代设计工具导出的 PDF 转化为可解释、可修复、可复检的印刷就绪候选文件，让设计师在交付印厂前看见并控制生产风险。
 
-## Product Boundary
+产品不是在线设计编辑器或云盘。产品是任务型 PDF 印前诊断与优化工具，以及逐步演进的 Print Production OS。
 
-- 当前输入：PDF。
-- 当前核心：Preflight Parser + Rule Engine + Fix Planner + Fix Engines + Validation。
-- AI 职责：解释、建议、问答和 QA 编排。
-- AI 不直接修改 PDF，不绕过规则或人工审批。
-- Figma/Canva/HTML 语义重建不属于当前 MVP。
-
-## Architecture
+## Current Product Contract
 
 ```text
-Web/API -> Upload -> Queue -> Isolated PDF Worker
-                           -> Parser -> UDF
-                           -> Rule Engine -> Issues
-                           -> Fix Planner -> Fix Engines
-                           -> Re-parse + Validate + Render Diff
-                           -> PDF + Audit Report
-
-AI Decision Layer reads UDF/issues and explains decisions.
+PDF
+  → Evidence-bearing Analysis
+  → Versioned Rules + Print Preset
+  → Risk-tiered Fix Plan
+  → Immutable Derivative
+  → Re-analysis + Validation
+  → Candidate PDF + Audit Report
+  → File Expiry / Deletion
 ```
 
-详见 [`docs/02-architecture/system-architecture.md`](docs/02-architecture/system-architecture.md)。
+### Alpha promise
+
+检查并修复常见 PDF 印前问题，生成经过自动化复检的印刷就绪候选文件。
+
+### The product never claims
+
+- 修改 metadata 就能恢复真实图片细节。
+- 相似字体可以静默替代原字体。
+- PDF/X 标签等于独立合规验证。
+- 一个通用 CMYK Profile 适合所有印刷条件。
+- AI 可以无确认地改变原始设计区域。
+
+## Source of Truth
+
+优先级从高到低：
+
+1. [Project Constitution](docs/00-project/constitution.md)
+2. Accepted ADR
+3. [Alpha PRD](docs/01-product/alpha-prd.md)
+4. Architecture and engine specifications
+5. Sprint and test specifications
+6. Source code
+
+历史聊天、旧 bootstrap prompt 和已标记 Superseded 的文档不是规范。
+
+## Architecture Invariants
+
+- Parser 只观察；Rule Engine 判定；Fix Engine 修改派生文件；Validator 复检。
+- LLM 只解释、建议和编排人工决策，不直接修改 PDF。
+- 原 PDF 不覆盖；源文件和派生文件分别记录哈希与 provenance。
+- 每次诊断绑定不可变的 Print Preset、Rule Set 和规则版本。
+- 修复安全等级仅为 `auto`、`confirm`、`manual`。
+- 不可信 PDF 在资源受限的独立进程或容器中处理。
+- 上传和输出文件默认临时保存，结构化生产数据按隐私策略保留。
+- PDF/X 只能在独立验证器通过后标记为 `validated`。
 
 ## Current Status
 
-- PDF Preflight POC：完成。
-- 统一 JSON/UDF 0.1：完成 POC 版。
-- 规则引擎：完成 6 类核心规则验证。
-- 修复：完成纯色出血、裁切标记、CMYK、字体嵌入和 PDF/X-4 候选。
-- 独立 PDF/X 合规验证：未完成，是 Alpha 门槛。
-- Artifex AGPL/商业许可决策：未完成，是 Alpha 门槛。
+Completed:
 
-## Current Sprint
+- PDF Preflight POC and controlled fixture.
+- UDF 0.1 parser and six core issue categories.
+- Effective PPI verification at 84.67 PPI.
+- Safe solid-color bleed, crop marks and PDF/X-4 candidate path.
+- qpdf/Poppler verification and automated tests.
+- Alpha PRD.
 
-[`docs/06-sprints/sprint-0.md`](docs/06-sprints/sprint-0.md) - 仓库规范化、POC 固化和 Alpha 进入条件。
+In progress:
 
-## Coding Rules
+- Versioned Print Preset and Rule Set foundation.
+- Rule execution audit data.
+- Governance consolidation.
 
-- 原始 PDF 永不覆盖；所有修改生成带哈希和 provenance 的派生版本。
-- 业务判断写入版本化规则，不散落在 UI、Prompt 或 Worker 中。
-- 每个 issue 必须有 code、severity、evidence、confidence 和 fix safety。
-- 高风险修复必须预览并确认。
-- 修改架构边界前提交 RFC/ADR。
-- 修复后必须重跑解析、规则、结构检查和视觉回归。
+Release gates:
+
+- Artifex commercial license, compliant open-source model, or approved replacement stack.
+- Independent PDF/X validator.
+- Two print-provider-reviewed Alpha Print Presets and ICC profiles.
+- Production isolation, temporary storage and deletion audit.
+- Real-world regression corpus and printer acceptance testing.
+
+## Current Development Policy
+
+Alpha development is authorized when a change:
+
+- is traceable to the accepted PRD or an accepted ADR;
+- preserves architecture invariants;
+- includes proportional automated validation;
+- does not bypass licensing, privacy or external validation release gates.
+
+Architecture boundary changes require an ADR. A new input format or changed product promise requires an RFC and PRD update before implementation.
 
 ## Key Links
 
 - [Specification index](docs/README.md)
-- [Feasibility report](docs/05-testing/technical-feasibility-report.md)
+- [Alpha PRD](docs/01-product/alpha-prd.md)
+- [System architecture](docs/02-architecture/system-architecture.md)
+- [Technical feasibility report](docs/05-testing/technical-feasibility-report.md)
 - [Architecture decisions](docs/decisions/README.md)
-- [Knowledge graph](docs/knowledge/issue-rule-fix-validation.md)
-- [POC verification evidence](output/poc/verification.json)
+- [Current POC validation](docs/05-testing/poc-validation.md)

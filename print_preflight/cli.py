@@ -5,6 +5,7 @@ import json
 
 from .analyzer import analyze_pdf, write_json
 from .fixer import add_bleed_and_crop_marks
+from .presets import DESIGNER_STANDARD_POC, available_print_presets, get_print_preset
 from .rules import run_preflight
 
 
@@ -19,6 +20,11 @@ def main() -> None:
     preflight_cmd = subparsers.add_parser("preflight")
     preflight_cmd.add_argument("input")
     preflight_cmd.add_argument("--output", required=True)
+    preflight_cmd.add_argument(
+        "--preset",
+        choices=available_print_presets(),
+        default=DESIGNER_STANDARD_POC.preset_id,
+    )
 
     fix_cmd = subparsers.add_parser("fix-boxes")
     fix_cmd.add_argument("input")
@@ -30,7 +36,7 @@ def main() -> None:
     if args.command == "analyze":
         write_json(analysis, args.output)
     elif args.command == "preflight":
-        write_json(run_preflight(analysis), args.output)
+        write_json(run_preflight(analysis, preset=get_print_preset(args.preset)), args.output)
     elif args.command == "fix-boxes":
         result = add_bleed_and_crop_marks(args.input, args.output, analysis, bleed_mm=args.bleed_mm)
         print(json.dumps(result, ensure_ascii=False, indent=2))

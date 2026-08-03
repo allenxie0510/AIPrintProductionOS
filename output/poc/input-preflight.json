@@ -1,5 +1,9 @@
 {
-  "engineVersion": "0.1-poc",
+  "engineVersion": "0.2.0-alpha",
+  "ruleSet": {
+    "ruleSetId": "core-preflight",
+    "version": "0.2.0-alpha"
+  },
   "status": "FAIL",
   "productionScore": 0,
   "summary": {
@@ -8,13 +12,29 @@
     "info": 0
   },
   "policy": {
+    "requiredImagePpi": 300,
     "requiredImageDpi": 300,
-    "requiredBleedMm": 3.0
+    "requiredBleedMm": 3.0,
+    "printPreset": {
+      "presetId": "designer-standard-poc",
+      "version": "0.1.0",
+      "label": "Designer standard print (POC)",
+      "productType": "small-format-commercial-print",
+      "requiredImagePpi": 300,
+      "bleedMm": 3.0,
+      "targetPdfx": "PDF/X-4 candidate",
+      "colorPolicy": "target-icc-required",
+      "status": "poc-only"
+    },
+    "runtimeOverrides": {}
   },
   "issues": [
     {
       "code": "COLOR.RGB_USED",
+      "ruleId": "COLOR.RGB_USED",
+      "ruleVersion": "1.0.0",
       "severity": "FAIL",
+      "confidence": 0.9,
       "page": null,
       "message": "RGB content is used in the PDF.",
       "evidence": [
@@ -22,12 +42,15 @@
       ],
       "fix": {
         "mode": "icc_convert_to_target_cmyk",
-        "safety": "review_required"
+        "safety": "confirm"
       }
     },
     {
       "code": "FONT.NOT_EMBEDDED",
+      "ruleId": "FONT.NOT_EMBEDDED",
+      "ruleVersion": "1.1.0",
       "severity": "FAIL",
+      "confidence": 0.95,
       "page": null,
       "message": "Font is not embedded: Helvetica",
       "evidence": {
@@ -35,13 +58,16 @@
         "type": "Type1"
       },
       "fix": {
-        "mode": "embed_exact_font_if_available_else_substitute",
-        "safety": "conditional"
+        "mode": "embed_exact_font_if_available",
+        "safety": "confirm"
       }
     },
     {
       "code": "FONT.NOT_EMBEDDED",
+      "ruleId": "FONT.NOT_EMBEDDED",
+      "ruleVersion": "1.1.0",
       "severity": "FAIL",
+      "confidence": 0.95,
       "page": null,
       "message": "Font is not embedded: Helvetica-Bold",
       "evidence": {
@@ -49,13 +75,16 @@
         "type": "Type1"
       },
       "fix": {
-        "mode": "embed_exact_font_if_available_else_substitute",
-        "safety": "conditional"
+        "mode": "embed_exact_font_if_available",
+        "safety": "confirm"
       }
     },
     {
       "code": "IMAGE.LOW_EFFECTIVE_DPI",
+      "ruleId": "IMAGE.LOW_EFFECTIVE_DPI",
+      "ruleVersion": "1.1.0",
       "severity": "FAIL",
+      "confidence": 1.0,
       "page": 1,
       "message": "Placed image effective DPI is 84.67, below 300.",
       "evidence": {
@@ -65,23 +94,29 @@
       },
       "fix": {
         "mode": "super_resolution_or_replace_source",
-        "safety": "review_required"
+        "safety": "confirm"
       }
     },
     {
       "code": "PAGE.TRIMBOX_MISSING",
+      "ruleId": "PAGE.TRIMBOX_MISSING",
+      "ruleVersion": "1.0.0",
       "severity": "FAIL",
+      "confidence": 1.0,
       "page": 1,
       "message": "TrimBox is not explicitly defined.",
       "evidence": null,
       "fix": {
         "mode": "set_trimbox_from_confirmed_page_size",
-        "safety": "conditional"
+        "safety": "confirm"
       }
     },
     {
       "code": "PAGE.BLEED_INSUFFICIENT",
+      "ruleId": "PAGE.BLEED_INSUFFICIENT",
+      "ruleVersion": "1.1.0",
       "severity": "FAIL",
+      "confidence": 1.0,
       "page": 1,
       "message": "Explicit bleed of at least 3.0 mm is not present on every edge.",
       "evidence": {
@@ -114,7 +149,10 @@
     },
     {
       "code": "PDFX.NOT_DECLARED",
+      "ruleId": "PDFX.NOT_DECLARED",
+      "ruleVersion": "1.1.0",
       "severity": "WARN",
+      "confidence": 1.0,
       "page": null,
       "message": "PDF/X declaration and OutputIntent are incomplete or missing.",
       "evidence": {
@@ -124,8 +162,52 @@
       },
       "fix": {
         "mode": "export_pdfx_with_output_intent",
-        "safety": "review_required"
+        "safety": "confirm"
       }
+    }
+  ],
+  "ruleExecutions": [
+    {
+      "ruleId": "PDF.ENCRYPTED",
+      "ruleVersion": "1.0.0",
+      "outcome": "PASS",
+      "issueCount": 0
+    },
+    {
+      "ruleId": "COLOR.RGB_USED",
+      "ruleVersion": "1.0.0",
+      "outcome": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "ruleId": "FONT.NOT_EMBEDDED",
+      "ruleVersion": "1.1.0",
+      "outcome": "FAIL",
+      "issueCount": 2
+    },
+    {
+      "ruleId": "IMAGE.LOW_EFFECTIVE_DPI",
+      "ruleVersion": "1.1.0",
+      "outcome": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "ruleId": "PAGE.TRIMBOX_MISSING",
+      "ruleVersion": "1.0.0",
+      "outcome": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "ruleId": "PAGE.BLEED_INSUFFICIENT",
+      "ruleVersion": "1.1.0",
+      "outcome": "FAIL",
+      "issueCount": 1
+    },
+    {
+      "ruleId": "PDFX.NOT_DECLARED",
+      "ruleVersion": "1.1.0",
+      "outcome": "WARN",
+      "issueCount": 1
     }
   ],
   "scoreDisclaimer": "POC heuristic score; not a print guarantee or industry certification."

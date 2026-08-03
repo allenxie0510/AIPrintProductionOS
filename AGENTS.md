@@ -2,7 +2,7 @@
 
 ## Required Reading
 
-Read `PROJECT.md`, `AI_CONTEXT.md`, the project constitution and relevant ADRs before implementation.
+Read `PROJECT.md`, `AI_CONTEXT.md`, `docs/00-project/constitution.md`, the accepted Alpha PRD and relevant ADRs before implementation.
 
 ## Ownership by Area
 
@@ -21,6 +21,7 @@ Read `PROJECT.md`, `AI_CONTEXT.md`, the project constitution and relevant ADRs b
 - Keep parser observations separate from rule conclusions.
 - Keep rule conclusions separate from fix execution.
 - A fix must declare `auto`, `confirm`, or `manual` safety.
+- Every diagnostic result binds immutable Print Preset, Rule Set and rule versions.
 - Preserve the original and record tool versions, ICC identity and hashes.
 - Use isolated processes for untrusted PDFs; do not share PyMuPDF across threads.
 - Do not weaken tests to make an unsafe fix pass.
@@ -32,3 +33,4 @@ Read `PROJECT.md`, `AI_CONTEXT.md`, the project constitution and relevant ADRs b
 - New rule: update rule spec, fixtures and tests in the same PR.
 - Architecture boundary or new input format: RFC, then ADR, then code.
 - Changed product promise: update vision/MVP documents before implementation.
+- Deterministic Alpha work covered by the accepted PRD may proceed while deployment-only license and external-validator gates remain open.

@@ -2,19 +2,23 @@
 
 This directory is the project memory. It stores adopted specifications and decisions, not raw chat transcripts.
 
-## 00 - Project
+## 00 - Governance and Project
 
+- [Canonical project memory](../PROJECT.md)
 - [Vision](00-project/vision.md)
 - [Constitution](00-project/constitution.md)
 - [Roadmap](00-project/roadmap.md)
+- [Superseded initial governance snapshot](00-governance/PROJECT.md)
 
 ## 01 - Product
 
 - [PDF-first MVP scope](01-product/mvp-scope.md)
+- [Online PDF Preflight Alpha PRD](01-product/alpha-prd.md)
 
 ## 02 - Architecture
 
 - [System architecture](02-architecture/system-architecture.md)
+- [Alpha technical design](02-architecture/alpha-technical-design.md)
 - [Universal Design Format POC schema](02-architecture/udf.md)
 
 ## 03 - Engine
@@ -35,6 +39,7 @@ This directory is the project memory. It stores adopted specifications and decis
 ## 06 - Sprints
 
 - [Sprint 0](06-sprints/sprint-0.md)
+- [Sprint 1 - Alpha deterministic foundation](06-sprints/sprint-1-alpha-foundation.md)
 
 ## 07 - AI Rules
 
@@ -49,6 +54,6 @@ This directory is the project memory. It stores adopted specifications and decis
 ## Document Status
 
 - **Accepted**: current source of truth.
-- **Proposed**: under review; cannot override accepted ADRs.
+- **Proposed**: under review; cannot authorize a changed product promise or architecture boundary.
 - **Superseded**: retained for history and linked to its replacement.
 - **POC**: experimentally supported but not yet a production guarantee.

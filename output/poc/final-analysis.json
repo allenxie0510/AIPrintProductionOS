@@ -4,7 +4,7 @@
     "fileName": "poc-fixed-pdfx4.pdf",
     "absolutePath": "output/pdf/poc-fixed-pdfx4.pdf",
     "bytes": 53791,
-    "sha256": "784c8a2cb7cad8687388c543115dc7b322c6460121b9ef98a4b2ec7522cfacfc",
+    "sha256": "ccbea9c8b783d96078b81b180b3a913133b5438d1d05309eb71015b93dbcb614",
     "pdfFormat": "PDF 1.6",
     "encrypted": false,
     "pageCount": 1
@@ -18,8 +18,8 @@
       "keywords": "",
       "creator": "",
       "producer": "GPL Ghostscript 10.07.1",
-      "creationDate": "D:20260803121237+08'00'",
-      "modDate": "D:20260803121237+08'00'",
+      "creationDate": "D:20260803125920+08'00'",
+      "modDate": "D:20260803125920+08'00'",
       "trapped": "",
       "encryption": null
     },
