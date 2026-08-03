@@ -33,6 +33,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HOME=/tmp \
     PRINT_MVP_DATA_DIR=/var/lib/printready \
+    PRINT_MVP_ENGINE_MEMORY_BYTES=335544320 \
+    PRINT_MVP_ENGINE_CPU_SECONDS=90 \
+    PRINT_MVP_ENGINE_TIMEOUT_SECONDS=120 \
     PRINT_POC_CMYK_PROFILE=/usr/local/share/ghostscript/iccprofiles/default_cmyk.icc
 
 RUN apt-get update \

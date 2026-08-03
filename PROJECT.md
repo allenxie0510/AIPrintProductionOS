@@ -83,6 +83,7 @@ MVP delivered:
 - Ephemeral PDF jobs with token-scoped access, SQLite metadata and TTL cleanup.
 - Upload → analyze → review → controlled fix → re-analyze → validate → download → delete.
 - Feedback capture and privacy-safe metadata retention after artifact deletion.
+- Resource-limited engine subprocesses and bounded-memory large-format PDF analysis for the public demo.
 
 Release gates:
 

@@ -28,6 +28,19 @@ Before changing the repository back to private or offering a proprietary service
 
 The free service has an ephemeral filesystem. A restart, sleep recovery or redeploy can remove the SQLite database and all artifacts before their nominal 24-hour TTL. This is acceptable only for evaluation.
 
+### Demo engine safety limits
+
+The Blueprint configures each PDF engine subprocess with:
+
+- 320 MiB virtual-memory limit;
+- 90 seconds CPU time;
+- 120 seconds wall time;
+- 20 pages, 100,000 PDF objects and 50 million pixels per image.
+
+The API process does not import or execute the PDF parser directly. A limit breach marks the job `failed` with a stable resource error while the API remains healthy. These subprocess boundaries reduce blast radius on the free instance; they are not a replacement for a durable queue and isolated production worker container.
+
+If the browser reports a CORS error together with `ERR_HTTP2_PROTOCOL_ERROR`, inspect Render Events first. A platform 502/instance restart does not contain FastAPI CORS headers and can therefore look like a CORS configuration problem. Verify `/health` and the OPTIONS preflight separately before changing CORS settings.
+
 ## Frontend deployment
 
 1. Set `NEXT_PUBLIC_API_BASE_URL` to the exact Render HTTPS origin during the frontend build.

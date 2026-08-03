@@ -33,6 +33,9 @@ type Job = {
   report?: Report;
 };
 
+type ApiError = { code?: string; message?: string };
+type JsonPayload = { error?: ApiError; status?: string; [key: string]: unknown };
+
 const presets = [
   { id: "designer-standard-poc", label: "名片 / 宣传单", meta: "300 PPI · 3 mm 出血" },
   { id: "poster-poc", label: "海报", meta: "150 PPI · 3 mm 出血" },
@@ -56,6 +59,41 @@ function formatBytes(bytes: number) {
 
 function ErrorBanner({ message }: { message: string }) {
   return <div className="error-banner" role="alert">{message}</div>;
+}
+
+const apiErrorMessages: Record<string, string> = {
+  ENGINE_RESOURCE_LIMIT: "这个 PDF 的结构或图片复杂度超过当前在线安全处理上限。请从设计工具重新导出为优化 PDF，或缩小页面/图片后重试。",
+  ENGINE_TIMEOUT: "这个 PDF 的处理时间超过在线安全上限。请从设计工具重新导出为优化 PDF 后重试。",
+  PDF_COMPLEXITY_LIMIT_EXCEEDED: "这个 PDF 超过当前在线安全复杂度限制。请减少页面、对象或超大图片后重试。",
+  ENGINE_PROCESS_FAILED: "PDF 引擎已安全终止，没有影响在线服务。请重新导出 PDF 后重试。",
+};
+
+function apiErrorMessage(error: ApiError | undefined, fallback: string) {
+  if (error?.code && apiErrorMessages[error.code]) return apiErrorMessages[error.code];
+  return error?.message ?? fallback;
+}
+
+async function jsonPayload(response: Response): Promise<JsonPayload> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
+async function fetchTransient(input: RequestInfo | URL, init?: RequestInit, attempts = 5) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(input, init);
+      if (![502, 503, 504].includes(response.status) || attempt === attempts - 1) return response;
+    } catch (cause) {
+      lastError = cause;
+      if (attempt === attempts - 1) throw cause;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, Math.min(1000 * 2 ** attempt, 8000)));
+  }
+  throw lastError instanceof Error ? lastError : new Error("在线处理服务暂时不可用。");
 }
 
 export default function Home() {
@@ -103,25 +141,36 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
+      const health = await fetchTransient(`${API_BASE}/health`, undefined, 6);
+      if (!health.ok) throw new Error("在线处理服务仍在启动，请稍后再试。");
       const body = new FormData();
       body.append("file", file);
       body.append("presetId", presetId);
       const response = await fetch(`${API_BASE}/v1/jobs`, { method: "POST", body });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "诊断失败，请检查文件后重试。");
-      const created = payload as Job;
+      const payload = await jsonPayload(response);
+      if (!response.ok) throw new Error(apiErrorMessage(payload.error, "诊断失败，请检查文件后重试。"));
+      const created = payload as unknown as Job;
       let createdReport: Report | null = null;
       for (let attempt = 0; attempt < 90; attempt += 1) {
-        const statusResponse = await fetch(`${API_BASE}/v1/jobs/${created.jobId}`, {
+        const statusResponse = await fetchTransient(`${API_BASE}/v1/jobs/${created.jobId}`, {
           headers: { "X-Job-Token": created.accessToken },
         });
-        const statusPayload = await statusResponse.json();
-        if (statusPayload.status === "failed") throw new Error(statusPayload.error?.message ?? "报告生成失败。");
+        const statusPayload = await jsonPayload(statusResponse);
+        if (!statusResponse.ok) {
+          throw new Error(apiErrorMessage(statusPayload.error, "任务状态读取失败，请重新上传。"));
+        }
+        if (statusPayload.status === "failed") {
+          throw new Error(apiErrorMessage(statusPayload.error, "报告生成失败。"));
+        }
         if (statusPayload.status === "awaiting_decision") {
-          const reportResponse = await fetch(`${API_BASE}/v1/jobs/${created.jobId}/report`, {
+          const reportResponse = await fetchTransient(`${API_BASE}/v1/jobs/${created.jobId}/report`, {
             headers: { "X-Job-Token": created.accessToken },
           });
-          if (reportResponse.ok) createdReport = await reportResponse.json();
+          if (!reportResponse.ok) {
+            const reportError = await jsonPayload(reportResponse);
+            throw new Error(apiErrorMessage(reportError.error, "诊断报告读取失败，请重新上传。"));
+          }
+          createdReport = await reportResponse.json();
           break;
         }
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -131,7 +180,9 @@ export default function Home() {
       setReport(createdReport);
       setBleedFix(createdReport.preflight.issues.some((item: Issue) => item.code === "PAGE.BLEED_INSUFFICIENT"));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "诊断失败。");
+      setError(cause instanceof TypeError
+        ? "无法连接在线处理服务。Render 可能正在冷启动或恢复，请等待约一分钟后重试。"
+        : cause instanceof Error ? cause.message : "诊断失败。");
     } finally {
       setBusy(false);
     }

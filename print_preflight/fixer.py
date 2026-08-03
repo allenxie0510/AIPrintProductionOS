@@ -11,7 +11,7 @@ from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import RectangleObject
 from reportlab.pdfgen import canvas
 
-from .analyzer import PT_PER_MM
+from .units import PT_PER_MM
 
 
 MIN_GHOSTSCRIPT_PDFX4 = (10, 7)

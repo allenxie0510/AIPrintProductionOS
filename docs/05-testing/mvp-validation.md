@@ -21,7 +21,7 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 
 ## Automated coverage
 
-### Python — 11 passing tests
+### Python — 12 passing tests
 
 - invalid file and unknown preset rejection;
 - token isolation;
@@ -33,6 +33,14 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - Print Preset and Rule Set versioning;
 - runtime override identity;
 - invalid preset validation.
+- bounded edge sampling for a generated 5280 × 7500 pt large-format page.
+
+### Resource regression
+
+- image placements are extracted from content streams without decoding image pixels;
+- page-edge classification renders four narrow clips instead of the full page;
+- the previously failing large-format analysis path fell from approximately 1.4 GB peak memory to approximately 85 MB locally;
+- analyze and fix stages execute in isolated subprocesses with memory, CPU and wall-time limits in the deployed container.
 
 ### Frontend
 
@@ -40,6 +48,7 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - ESLint: PASS.
 - server-rendered product smoke test: PASS.
 - responsive upload, diagnosis, fix confirmation and result states implemented.
+- transient Render 502/503/504 polling failures retry with bounded exponential backoff and actionable Chinese errors.
 
 ### Independent structure check
 
@@ -60,9 +69,9 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 
 This validation does not prove public production readiness. Remaining gates:
 
-- application background tasks must become a durable queue;
+- application background tasks must become a durable queue; the demo now isolates engine processes but queue state is still local;
 - local filesystem must become lifecycle-managed object storage;
-- PDF processing must run in isolated resource-limited containers;
+- PDF processing must move from resource-limited subprocesses to isolated worker containers for production;
 - PyMuPDF/Ghostscript licensing must be resolved;
 - PDF/X requires an approved independent validator;
 - POC Print Presets require print-provider-reviewed ICC profiles;

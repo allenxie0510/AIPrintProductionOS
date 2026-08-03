@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pymupdf
+
 from print_preflight.analyzer import analyze_pdf
 from print_preflight.fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk, supports_pdfx4
 from print_preflight.profiles import resolve_cmyk_profile
@@ -19,6 +21,20 @@ except FileNotFoundError:
 
 
 class PreflightPocTest(unittest.TestCase):
+    def test_large_format_page_uses_bounded_edge_sampling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "large-format.pdf"
+            with pymupdf.open() as document:
+                page = document.new_page(width=5280, height=7500)
+                page.draw_rect(page.rect, color=(0.9, 0.2, 0.1), fill=(0.9, 0.2, 0.1))
+                document.save(source)
+
+            analysis = analyze_pdf(source)
+            border = analysis["pages"][0]["border"]
+            self.assertEqual(border["samplingMethod"], "four_edge_clips_72ppi")
+            self.assertLess(border["renderedPixelCount"], 150_000)
+            self.assertEqual(border["automationSafety"], "auto")
+
     def test_controlled_sample_and_box_fix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -32,6 +48,8 @@ class PreflightPocTest(unittest.TestCase):
             self.assertIn("FONT.NOT_EMBEDDED", codes)
             self.assertIn("IMAGE.LOW_EFFECTIVE_DPI", codes)
             self.assertAlmostEqual(analysis["document"]["images"][0]["minEffectiveDpi"], 84.67, places=2)
+            self.assertEqual(analysis["document"]["images"][0]["placementIndex"], 1)
+            self.assertIsNone(analysis["document"]["images"][0]["digestMd5"])
 
             add_bleed_and_crop_marks(source, boxed, analysis)
             fixed = analyze_pdf(boxed)
