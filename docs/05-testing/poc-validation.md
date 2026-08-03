@@ -42,4 +42,4 @@ qpdf --check output/pdf/poc-fixed-pdfx4.pdf
 
 The candidate PDF has not passed an independent ISO PDF/X conformance validator or print-provider acceptance test.
 
-GitHub Actions runs the same tests and end-to-end POC on Linux with an explicitly selected POC CMYK profile, then uploads the JSON, rendered preview and PDF as short-lived workflow artifacts.
+GitHub Actions always runs parser/rule tests and independently validates the checked-in candidate with qpdf and Poppler. Full PDF/X-4 generation runs only when the worker has Ghostscript 10.07 or newer; Ubuntu's Ghostscript 10.02.1 fails that path with `rangecheck`. CI uploads the JSON, rendered preview and PDF as short-lived workflow artifacts.

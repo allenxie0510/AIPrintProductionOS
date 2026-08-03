@@ -50,6 +50,8 @@ POC 自生成一页 A4 PDF，故意包含以下已知事实：
 | LittleCMS | 2.19 | Ghostscript/Pillow 背后的 ICC 色彩转换能力 |
 | Poppler | 26.05.0 | 独立渲染与 `pdfinfo` 交叉检查 |
 
+补充兼容性验证：GitHub Ubuntu runner 的 Ghostscript 10.02.1 在 `PDFX=4` 路径返回 `rangecheck`，而本地 10.07.1 实测成功。因此当前 PDF/X-4 生成器明确要求 Ghostscript 10.07 或更高版本；较旧环境只能执行核心规则测试并验证已生成候选文件，不能声称完成同等导出能力。
+
 PyMuPDF 的 `get_image_info()` 能返回实际显示图片的 bbox、像素、颜色空间、变换矩阵和 xref，页面 API 也暴露 TrimBox/BleedBox 等信息，适合做高层业务解析；qpdf JSON 则能提供完整的 PDF 对象级表示，适合作为疑难文件的低层证据通道。[PyMuPDF Page API](https://pymupdf.readthedocs.io/en/latest/page.html) [qpdf JSON](https://qpdf.readthedocs.io/en/stable/json.html)
 
 ## 3. 实测结果

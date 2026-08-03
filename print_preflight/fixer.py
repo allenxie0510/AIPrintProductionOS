@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,25 @@ from pypdf.generic import RectangleObject
 from reportlab.pdfgen import canvas
 
 from .analyzer import PT_PER_MM
+
+
+MIN_GHOSTSCRIPT_PDFX4 = (10, 7)
+
+
+def ghostscript_version(executable: str | None = None) -> tuple[int, ...] | None:
+    gs = executable or shutil.which("gs")
+    if not gs:
+        return None
+    completed = subprocess.run([gs, "--version"], capture_output=True, text=True, check=False)
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", completed.stdout or completed.stderr)
+    if completed.returncode != 0 or not match:
+        return None
+    return tuple(int(part) for part in match.groups(default="0"))
+
+
+def supports_pdfx4(executable: str | None = None) -> bool:
+    version = ghostscript_version(executable)
+    return bool(version and version[:2] >= MIN_GHOSTSCRIPT_PDFX4)
 
 
 def _marks_overlay(width: float, height: float, trim: tuple[float, float, float, float],
@@ -120,6 +140,10 @@ def export_pdfx4_cmyk(input_pdf: str | Path, output_pdf: str | Path, cmyk_profil
     gs = shutil.which("gs")
     if not gs:
         raise RuntimeError("Ghostscript is required for this POC step")
+    version = ghostscript_version(gs)
+    if not supports_pdfx4(gs):
+        rendered = ".".join(str(part) for part in version) if version else "unknown"
+        raise RuntimeError(f"PDF/X-4 POC export requires Ghostscript >= 10.07; found {rendered}")
     profile = Path(cmyk_profile).resolve()
     if not profile.exists():
         raise FileNotFoundError(profile)

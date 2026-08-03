@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from print_preflight.analyzer import analyze_pdf
-from print_preflight.fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk
+from print_preflight.fixer import add_bleed_and_crop_marks, export_pdfx4_cmyk, supports_pdfx4
 from print_preflight.profiles import resolve_cmyk_profile
 from print_preflight.rules import run_preflight
 from scripts.generate_samples import make_sample
@@ -39,7 +39,10 @@ class PreflightPocTest(unittest.TestCase):
             self.assertTrue(fixed["pages"][0]["bleedBox"]["explicit"])
             self.assertAlmostEqual(min(fixed["pages"][0]["bleedMargins"].values()), 3.0, places=2)
 
-    @unittest.skipUnless(shutil.which("gs") and PROFILE.exists(), "Ghostscript and CMYK profile required")
+    @unittest.skipUnless(
+        shutil.which("gs") and PROFILE.exists() and supports_pdfx4(),
+        "Ghostscript >= 10.07 and a CMYK profile are required for PDF/X-4 generation",
+    )
     def test_pdfx_cmyk_integration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
