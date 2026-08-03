@@ -48,6 +48,12 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("--page", type=int, default=1)
     preview.add_argument("--max-edge", type=int, default=1400)
 
+    image_thumbnail = subcommands.add_parser("image-thumbnail")
+    image_thumbnail.add_argument("input")
+    image_thumbnail.add_argument("output")
+    image_thumbnail.add_argument("xref", type=int)
+    image_thumbnail.add_argument("--max-edge", type=int, default=240)
+
     bleed = subcommands.add_parser("bleed")
     bleed.add_argument("input")
     bleed.add_argument("output")
@@ -92,6 +98,15 @@ def main() -> int:
                 args.input,
                 args.output,
                 page_number=args.page,
+                max_edge=args.max_edge,
+            )
+        elif args.stage == "image-thumbnail":
+            from .preview import render_image_thumbnail
+
+            result = render_image_thumbnail(
+                args.input,
+                args.output,
+                xref=args.xref,
                 max_edge=args.max_edge,
             )
         elif args.stage == "bleed":

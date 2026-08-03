@@ -277,8 +277,8 @@ def _image_payload(info: dict[str, Any], placement_index: int) -> dict[str, Any]
     }
 
 
-def _border_classification(page: pymupdf.Page) -> dict[str, Any]:
-    page_rect = page.rect
+def _border_classification(page: pymupdf.Page, sample_rect: pymupdf.Rect | None = None) -> dict[str, Any]:
+    page_rect = sample_rect or page.rect
     min_dimension = min(page_rect.width, page_rect.height)
     if min_dimension < 8:
         raise PdfAnalysisLimitError("PDF page is too small for safe edge classification.")
@@ -327,7 +327,7 @@ def _border_classification(page: pymupdf.Page) -> dict[str, Any]:
         "uniformPixelRatio": round(uniform_ratio, 4),
         "sampledPixelCount": len(pixels),
         "renderedPixelCount": rendered_pixels,
-        "samplingMethod": "four_edge_clips_72ppi",
+        "samplingMethod": "four_trim_edge_clips_72ppi" if sample_rect is not None else "four_edge_clips_72ppi",
         "recommendedStrategy": strategy,
         "automationSafety": safety,
     }
@@ -407,7 +407,7 @@ def analyze_pdf(
                 "bleedMargins": margins,
                 "fonts": font_items,
                 "images": images,
-                "border": _border_classification(page),
+                "border": _border_classification(page, trim if trim_explicit else None),
             }
         )
 

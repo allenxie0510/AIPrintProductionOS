@@ -8,14 +8,14 @@ from .presets import DESIGNER_STANDARD_POC, PrintPreset
 
 SEVERITY_DEDUCTION = {"FAIL": 18, "WARN": 6, "INFO": 0}
 RULE_SET_ID = "core-preflight"
-RULE_SET_VERSION = "0.2.0-alpha"
+RULE_SET_VERSION = "0.3.0-alpha"
 RULE_VERSIONS = {
     "PDF.ENCRYPTED": "1.0.0",
     "COLOR.RGB_USED": "1.0.0",
     "FONT.NOT_EMBEDDED": "1.1.0",
-    "IMAGE.LOW_EFFECTIVE_DPI": "1.1.0",
+    "IMAGE.LOW_EFFECTIVE_DPI": "1.2.0",
     "PAGE.TRIMBOX_MISSING": "1.0.0",
-    "PAGE.BLEED_INSUFFICIENT": "1.1.0",
+    "PAGE.BLEED_INSUFFICIENT": "1.2.0",
     "PDFX.NOT_DECLARED": "1.1.0",
 }
 
@@ -161,7 +161,16 @@ def run_preflight(
                     severity,
                     f"Placed image effective DPI is {dpi}, below {required_dpi}.",
                     page=image["page"],
-                    evidence={"xref": image["xref"], "dpi": dpi, "required": required_dpi},
+                    evidence={
+                        "xref": image["xref"],
+                        "dpi": dpi,
+                        "required": required_dpi,
+                        "placementIndex": image["placementIndex"],
+                        "pixelWidth": image["pixelWidth"],
+                        "pixelHeight": image["pixelHeight"],
+                        "placedWidthMm": float(image["bbox"]["widthMm"]),
+                        "placedHeightMm": float(image["bbox"]["heightMm"]),
+                    },
                     auto_fix="super_resolution_or_replace_source",
                     safety="confirm",
                 )

@@ -115,6 +115,20 @@ def preview(
     )
 
 
+@app.get("/v1/jobs/{job_id}/assets/image-thumbnail")
+def image_thumbnail(
+    job_id: str,
+    access_token: Annotated[str, Header(alias="X-Job-Token")],
+    xref: int,
+) -> FileResponse:
+    output = service.image_thumbnail_path(job_id, access_token, xref=xref)
+    return FileResponse(
+        output,
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @app.post("/v1/jobs/{job_id}/fix")
 def fix_job(
     job_id: str,

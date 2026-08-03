@@ -23,7 +23,7 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 
 ## Automated coverage
 
-### Python — 19 passing tests
+### Python — 20 passing tests
 
 - invalid file and unknown preset rejection;
 - token isolation;
@@ -43,8 +43,10 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - invalid preset validation.
 - bounded edge sampling for a generated 5280 × 7500 pt large-format page.
 - bounded PNG preview rendering and authenticated source/current preview endpoints;
-- complex-border rejection for automatic bleed plus honest trim/crop fallback;
-- confirmation that trim-only repair leaves the insufficient-bleed issue unresolved.
+- confirmation that trim-only repair leaves the insufficient-bleed issue unresolved;
+- exact user sequence `set TrimBox → add image bleed`, proving TrimBox dimensions do not grow, BleedBox is 3 mm on every edge, the earlier marks are clipped, and the final marks remain outside bleed;
+- protected image-XObject thumbnail generation plus page, pixel and placed-size evidence;
+- document-wide CMYK conversion provenance (`all_pages`, page count and ICC SHA-256) and post-conversion absence of used RGB evidence.
 
 ### Resource regression
 
@@ -62,6 +64,8 @@ The same live API flow was also run with both `bleed_and_crop` and explicitly ac
 - uploaded PDF preview and repaired-file before/after slider implemented.
 - current derivative preview is shown by default after every completed mutation; comparison is an explicit secondary mode.
 - exact font upload and high-resolution image replacement controls are attached to their diagnosed issue rows.
+- every low-resolution image issue shows its own authenticated thumbnail and placement measurements before replacement.
+- CMYK is presented and executed as one whole-document batch action; completion stays in the repair workflow until the user explicitly opens delivery.
 - unavailable repair actions are disabled from the server-authored executable plan.
 - transient Render 502/503/504 polling failures retry with bounded exponential backoff and actionable Chinese errors.
 

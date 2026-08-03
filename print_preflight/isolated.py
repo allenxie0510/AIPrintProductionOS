@@ -89,6 +89,26 @@ def render_pdf_preview_isolated(
     )
 
 
+def render_image_thumbnail_isolated(
+    source: Path,
+    output: Path,
+    *,
+    xref: int,
+    max_edge: int = 240,
+) -> dict[str, Any]:
+    return _run(
+        [
+            "image-thumbnail",
+            str(source),
+            str(output),
+            str(xref),
+            "--max-edge",
+            str(max_edge),
+        ],
+        output.parent,
+    )
+
+
 def add_bleed_and_crop_marks_isolated(
     source: Path,
     output: Path,

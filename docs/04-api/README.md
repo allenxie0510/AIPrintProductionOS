@@ -20,6 +20,7 @@ This protects unguessable task URLs but is not an account system. Tenant account
 | `GET` | `/v1/jobs/{jobId}` | Job state, score and expiry |
 | `GET` | `/v1/jobs/{jobId}/report` | Evidence, issues and validation report |
 | `GET` | `/v1/jobs/{jobId}/preview?stage=source|current&page=1` | Token-protected, no-store PNG preview |
+| `GET` | `/v1/jobs/{jobId}/assets/image-thumbnail?xref=…` | Token-protected, no-store thumbnail for one diagnosed image object |
 | `POST` | `/v1/jobs/{jobId}/fix` | Execute confirmed safe fix plan |
 | `POST` | `/v1/jobs/{jobId}/assets/image-replacement` | Replace one diagnosed image XObject with a sufficient high-resolution original |
 | `POST` | `/v1/jobs/{jobId}/assets/font` | Validate and stage an exact TTF/OTF font for candidate export |
@@ -29,9 +30,9 @@ This protects unguessable task URLs but is not an account system. Tenant account
 
 ## Current fix actions
 
-- `bleed_and_crop`: executes only when the border classifier permits deterministic solid-color extension.
+- `bleed_and_crop`: uses automatic solid-color extension for uniform edges or confirmed non-generative edge-pixel mirror extension for complex image edges. It normalizes from TrimBox, writes exactly 3/5 mm according to the preset and produces one crop-mark set outside BleedBox.
 - `trim_and_crop_marks`: adds a slug, explicit TrimBox and crop marks without generating or declaring bleed. This is the honest fallback for complex page borders.
-- `pdfx_candidate`: ICC conversion and PDF/X-4 candidate generation. Missing fonts require explicit substitution acknowledgement. It never returns independent PDF/X certification.
+- `pdfx_candidate`: one document-wide ICC conversion across every page plus PDF/X-4 candidate generation. Missing fonts require explicit substitution acknowledgement. It never returns independent PDF/X certification.
 
 `image-replacement` accepts `xref` plus PNG/JPEG/TIFF/WebP multipart data. The service calculates minimum pixel dimensions from every current placement and the active Print Preset, rejects undersized assets, preserves layout, then re-analyzes effective PPI.
 
@@ -39,7 +40,7 @@ This protects unguessable task URLs but is not an account system. Tenant account
 
 The report includes `fixPlan[]` entries with `applicable`, `executable`, `safety` and `reason`. The API independently re-evaluates this plan before every mutation and returns `FIX_ACTION_UNSAFE` for a stale or unsafe client selection.
 
-Preview PNGs are bounded renders produced in the isolated PDF worker. They use the same task token as the report, return `Cache-Control: private, no-store`, expire with the job and are deleted with all other artifacts.
+Preview and image-thumbnail PNGs are bounded renders produced in the isolated PDF worker. They use the same task token as the report, return `Cache-Control: private, no-store`, expire with the job and are deleted with all other artifacts.
 
 ## State model
 

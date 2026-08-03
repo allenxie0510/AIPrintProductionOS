@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import re
 import shutil
 import subprocess
@@ -8,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pymupdf
-from PIL import Image
+from PIL import Image, ImageOps
 from pypdf import PdfReader, PdfWriter, Transformation
 from pypdf.generic import NameObject, RectangleObject
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from .units import PT_PER_MM
@@ -132,6 +134,78 @@ def _marks_overlay_page(
     return page
 
 
+def _explicit_trim_or_media(page: Any) -> tuple[float, float, float, float]:
+    box = page.trimbox if NameObject("/TrimBox") in page else page.mediabox
+    return (float(box.left), float(box.bottom), float(box.right), float(box.top))
+
+
+def _png_reader(image: Image.Image) -> ImageReader:
+    payload = io.BytesIO()
+    image.convert("RGB").save(payload, format="PNG")
+    payload.seek(0)
+    return ImageReader(payload)
+
+
+def _render_clip(page: pymupdf.Page, clip: pymupdf.Rect, scale: float = 2.0) -> Image.Image:
+    pixmap = page.get_pixmap(
+        matrix=pymupdf.Matrix(scale, scale),
+        colorspace=pymupdf.csRGB,
+        alpha=False,
+        clip=clip,
+    )
+    return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+
+
+def _edge_bleed_overlay_page(
+    input_pdf: str | Path,
+    page_index: int,
+    width: float,
+    height: float,
+    trim: tuple[float, float, float, float],
+    bleed_pt: float,
+):
+    """Mirror only artwork edge strips into the bleed; the Trim Area stays vector and untouched."""
+    with pymupdf.open(Path(input_pdf).resolve()) as document:
+        source_page = document.load_page(page_index)
+        source_trim = source_page.trimbox
+        if source_trim.is_empty:
+            source_trim = source_page.rect
+        band = min(bleed_pt, source_trim.width / 2, source_trim.height / 2)
+        clips = {
+            "top": pymupdf.Rect(source_trim.x0, source_trim.y0, source_trim.x1, source_trim.y0 + band),
+            "bottom": pymupdf.Rect(source_trim.x0, source_trim.y1 - band, source_trim.x1, source_trim.y1),
+            "left": pymupdf.Rect(source_trim.x0, source_trim.y0, source_trim.x0 + band, source_trim.y1),
+            "right": pymupdf.Rect(source_trim.x1 - band, source_trim.y0, source_trim.x1, source_trim.y1),
+            "top_left": pymupdf.Rect(source_trim.x0, source_trim.y0, source_trim.x0 + band, source_trim.y0 + band),
+            "top_right": pymupdf.Rect(source_trim.x1 - band, source_trim.y0, source_trim.x1, source_trim.y0 + band),
+            "bottom_left": pymupdf.Rect(source_trim.x0, source_trim.y1 - band, source_trim.x0 + band, source_trim.y1),
+            "bottom_right": pymupdf.Rect(source_trim.x1 - band, source_trim.y1 - band, source_trim.x1, source_trim.y1),
+        }
+        rendered = {name: _render_clip(source_page, clip) for name, clip in clips.items()}
+
+    stream = io.BytesIO()
+    c = canvas.Canvas(stream, pagesize=(width, height), pageCompression=1)
+    tx0, ty0, tx1, ty1 = trim
+    trim_width = tx1 - tx0
+    trim_height = ty1 - ty0
+    c.drawImage(_png_reader(ImageOps.flip(rendered["top"])), tx0, ty1, width=trim_width, height=bleed_pt, mask="auto")
+    c.drawImage(_png_reader(ImageOps.flip(rendered["bottom"])), tx0, ty0 - bleed_pt, width=trim_width, height=bleed_pt, mask="auto")
+    c.drawImage(_png_reader(ImageOps.mirror(rendered["left"])), tx0 - bleed_pt, ty0, width=bleed_pt, height=trim_height, mask="auto")
+    c.drawImage(_png_reader(ImageOps.mirror(rendered["right"])), tx1, ty0, width=bleed_pt, height=trim_height, mask="auto")
+    corner_positions = {
+        "top_left": (tx0 - bleed_pt, ty1),
+        "top_right": (tx1, ty1),
+        "bottom_left": (tx0 - bleed_pt, ty0 - bleed_pt),
+        "bottom_right": (tx1, ty0 - bleed_pt),
+    }
+    for name, (x, y) in corner_positions.items():
+        corner = ImageOps.flip(ImageOps.mirror(rendered[name]))
+        c.drawImage(_png_reader(corner), x, y, width=bleed_pt, height=bleed_pt, mask="auto")
+    c.showPage()
+    c.save()
+    return PdfReader(io.BytesIO(stream.getvalue())).pages[0]
+
+
 def add_trim_and_crop_marks(
     input_pdf: str | Path,
     output_pdf: str | Path,
@@ -144,16 +218,18 @@ def add_trim_and_crop_marks(
     page_results = []
 
     for index, source_page in enumerate(reader.pages):
-        source_width = float(source_page.mediabox.width)
-        source_height = float(source_page.mediabox.height)
+        source_trim = _explicit_trim_or_media(source_page)
+        source_width = source_trim[2] - source_trim[0]
+        source_height = source_trim[3] - source_trim[1]
         output_width = source_width + 2 * slug_pt
         output_height = source_height + 2 * slug_pt
         trim = (slug_pt, slug_pt, slug_pt + source_width, slug_pt + source_height)
         overlay_page = _marks_overlay_page(output_width, output_height, trim, 0.0, None)
         target = writer.add_blank_page(width=output_width, height=output_height)
         target.merge_page(overlay_page)
-        tx = slug_pt - float(source_page.mediabox.left)
-        ty = slug_pt - float(source_page.mediabox.bottom)
+        source_page.cropbox = RectangleObject(list(source_trim))
+        tx = slug_pt - source_trim[0]
+        ty = slug_pt - source_trim[1]
         target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
         target.mediabox = RectangleObject([0, 0, output_width, output_height])
         target.cropbox = RectangleObject([0, 0, output_width, output_height])
@@ -183,22 +259,39 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
 
     for index, source_page in enumerate(reader.pages):
         classification = analysis["pages"][index]["border"]
-        if classification["automationSafety"] != "auto":
-            raise ValueError(f"Page {index + 1} border is not safe for automatic solid-color bleed")
-        rgb = tuple(classification["sampledRgb"])
-        source_width = float(source_page.mediabox.width)
-        source_height = float(source_page.mediabox.height)
+        strategy = classification["recommendedStrategy"]
+        rgb = tuple(classification["sampledRgb"]) if strategy == "solid_color_extend" else None
+        source_trim = _explicit_trim_or_media(source_page)
+        source_width = source_trim[2] - source_trim[0]
+        source_height = source_trim[3] - source_trim[1]
         margin = bleed_pt + slug_pt
         output_width = source_width + 2 * margin
         output_height = source_height + 2 * margin
         trim = (margin, margin, margin + source_width, margin + source_height)
 
-        overlay_page = _marks_overlay_page(output_width, output_height, trim, bleed_pt, rgb)
+        if strategy == "solid_color_extend":
+            bleed_overlay = _marks_overlay_page(output_width, output_height, trim, bleed_pt, rgb)
+            applied_strategy = "solid_color_extend"
+            safety = "auto"
+        else:
+            bleed_overlay = _edge_bleed_overlay_page(
+                input_pdf,
+                index,
+                output_width,
+                output_height,
+                trim,
+                bleed_pt,
+            )
+            applied_strategy = "edge_pixel_mirror_extend"
+            safety = "confirm"
+        marks_overlay = _marks_overlay_page(output_width, output_height, trim, bleed_pt, None)
         target = writer.add_blank_page(width=output_width, height=output_height)
-        target.merge_page(overlay_page)
-        tx = margin - float(source_page.mediabox.left)
-        ty = margin - float(source_page.mediabox.bottom)
+        target.merge_page(bleed_overlay)
+        source_page.cropbox = RectangleObject(list(source_trim))
+        tx = margin - source_trim[0]
+        ty = margin - source_trim[1]
         target.merge_transformed_page(source_page, Transformation().translate(tx=tx, ty=ty), over=True)
+        target.merge_page(marks_overlay)
         target.mediabox = RectangleObject([0, 0, output_width, output_height])
         target.cropbox = RectangleObject([0, 0, output_width, output_height])
         target.trimbox = RectangleObject(list(trim))
@@ -210,11 +303,14 @@ def add_bleed_and_crop_marks(input_pdf: str | Path, output_pdf: str | Path, anal
         ])
         page_results.append({
             "page": index + 1,
-            "strategy": "solid_color_extend",
-            "sampledRgb": list(rgb),
+            "strategy": applied_strategy,
+            "safety": safety,
+            "sampledRgb": list(rgb) if rgb is not None else None,
             "bleedMm": bleed_mm,
             "slugMm": slug_mm,
             "cropMarksAdded": True,
+            "cropMarksOutsideBleed": True,
+            "trimAreaPreserved": True,
         })
 
     output = Path(output_pdf)
@@ -296,11 +392,18 @@ def export_pdfx4_cmyk(input_pdf: str | Path, output_pdf: str | Path, cmyk_profil
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"Ghostscript failed ({completed.returncode}): {completed.stderr or completed.stdout}")
+    with profile.open("rb") as handle:
+        profile_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+    page_count = len(PdfReader(str(input_pdf), strict=False).pages)
     return {
         "output": str(output),
+        "strategy": "document_wide_icc_cmyk",
+        "scope": "all_pages",
+        "pageCount": page_count,
         "command": command,
         "stdout": completed.stdout,
         "stderr": completed.stderr,
         "profile": str(profile),
+        "profileSha256": profile_sha256,
         "warning": "PDF/X declaration is a candidate until independently validated against the target print condition.",
     }

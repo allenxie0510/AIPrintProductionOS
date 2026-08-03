@@ -46,6 +46,7 @@ type FixAction = {
   safety: "auto" | "confirm" | "manual";
   reason: string;
   requiresFontAcknowledgement?: boolean;
+  method?: string | null;
 };
 
 type Job = {
@@ -184,6 +185,50 @@ function BeforeAfterComparison({ before, after, position, onChange }: {
   );
 }
 
+function ImageIssueEvidence({ job, issue }: { job: Job; issue: Issue }) {
+  const evidence = issueEvidence(issue);
+  const xref = Number(evidence.xref);
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    fetch(`${API_BASE}/v1/jobs/${job.jobId}/assets/image-thumbnail?xref=${xref}`, {
+      headers: { "X-Job-Token": job.accessToken },
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("thumbnail unavailable");
+        return response.blob();
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        if (active) setThumbnailUrl(objectUrl);
+      })
+      .catch(() => { if (active) setThumbnailFailed(true); });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [job.accessToken, job.jobId, xref]);
+
+  return (
+    <div className="image-evidence">
+      <div className="image-thumbnail">
+        {thumbnailUrl
+          ? <img src={thumbnailUrl} alt={`低分辨率图片对象 ${xref} 缩略图`} />
+          : <span>{thumbnailFailed ? "预览不可用" : "载入图片…"}</span>}
+      </div>
+      <div>
+        <strong>第 {issue.page ?? "-"} 页 · 图片 #{String(evidence.placementIndex ?? xref)}</strong>
+        <span>源图 {String(evidence.pixelWidth ?? "-")} × {String(evidence.pixelHeight ?? "-")} px</span>
+        <span>落版约 {String(evidence.placedWidthMm ?? "-")} × {String(evidence.placedHeightMm ?? "-")} mm</span>
+        <em>当前 {String(evidence.dpi ?? "-")} PPI · 目标 {String(evidence.required ?? "-")} PPI</em>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [presetId, setPresetId] = useState(presets[0].id);
@@ -201,9 +246,11 @@ export default function Home() {
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState("");
   const [fixedPreviewUrl, setFixedPreviewUrl] = useState("");
   const [comparePosition, setComparePosition] = useState(50);
+  const [busyMessage, setBusyMessage] = useState("正在隔离解析 PDF…");
 
   const activePreflight = report?.afterPreflight ?? report?.preflight;
   const issues = activePreflight?.issues ?? [];
+  const hasRgbIssue = issues.some((issue) => issue.code === "COLOR.RGB_USED");
   const hasRepairs = Boolean(report?.afterPreflight);
   const resolvedIssues = (report?.fix?.history ?? []).flatMap((event) => event.resolvedIssues ?? []);
   const resolvedIssueKeys = new Set(resolvedIssues.map(issueKey));
@@ -258,6 +305,7 @@ export default function Home() {
   async function analyze() {
     if (!file) return;
     setBusy(true);
+    setBusyMessage("正在隔离解析 PDF 对象并生成诊断证据…");
     setError("");
     try {
       const health = await fetchTransient(`${API_BASE}/health`, undefined, 6);
@@ -310,6 +358,12 @@ export default function Home() {
   async function applySingleFix(action: FixAction["action"], key: string, acknowledgeFontSubstitution = false) {
     if (!job) return;
     setBusy(true);
+    setDeliveryMode(false);
+    setBusyMessage(action === "pdfx_candidate"
+      ? "正在将整份 PDF 的所有页面批量转换为目标 CMYK，并执行复检…"
+      : action === "bleed_and_crop"
+        ? "正在以 TrimBox 为准生成 3 mm 出血和唯一裁切标记…"
+        : "正在设置唯一裁切框并重新检查页面几何…");
     setFixingIssue(key);
     setError("");
     setLastSuccess("");
@@ -339,6 +393,8 @@ export default function Home() {
     const evidence = issueEvidence(issue);
     const key = issueKey(issue);
     setBusy(true);
+    setDeliveryMode(false);
+    setBusyMessage("正在原位替换所选图片并重新计算有效 PPI…");
     setFixingIssue(key);
     setError("");
     setLastSuccess("");
@@ -528,7 +584,7 @@ export default function Home() {
                 {fixedPreviewUrl || sourcePreviewUrl
                   ? <img src={fixedPreviewUrl || sourcePreviewUrl} alt="当前 PDF 第一页实际预览" />
                   : <object data={localPdfUrl} type="application/pdf" aria-label="上传 PDF 预览"><p>浏览器无法显示 PDF 预览。</p></object>}
-                {busy && <div className="preview-processing"><span />正在隔离解析 PDF…</div>}
+                {busy && <div className="preview-processing"><span />{busyMessage}</div>}
               </div>
               <p className="preview-note">{file.name} · {formatBytes(file.size)}</p>
             </div>
@@ -583,7 +639,6 @@ export default function Home() {
                 {displayedIssues.map((issue) => {
                   const key = issueKey(issue);
                   const resolved = resolvedIssueKeys.has(key) && !issues.some((current) => sameIssue(issue, current));
-                  const evidence = issueEvidence(issue);
                   const isWorking = fixingIssue === key;
                   const fontName = fontNameFromIssue(issue);
                   const exactFontReady = Boolean(report.providedFonts?.some((item) => normalizedFontName(item.expectedName) === normalizedFontName(fontName) && item.ready));
@@ -601,18 +656,26 @@ export default function Home() {
                       </div>
                       {!resolved && <div className="issue-action">
                         {issue.code === "PAGE.TRIMBOX_MISSING" && trimAction?.executable && <button disabled={busy} onClick={() => applySingleFix("trim_and_crop_marks", key)}>{isWorking ? "正在设置…" : "设置裁切框"}</button>}
-                        {issue.code === "PAGE.BLEED_INSUFFICIENT" && bleedAction?.executable && <button disabled={busy} onClick={() => applySingleFix("bleed_and_crop", key)}>{isWorking ? "正在补出血…" : "安全补足出血"}</button>}
+                        {issue.code === "PAGE.BLEED_INSUFFICIENT" && bleedAction?.executable && <>
+                          <button disabled={busy} onClick={() => applySingleFix("bleed_and_crop", key)}>{isWorking ? "正在补出血…" : bleedAction.method === "edge_pixel_mirror_extend" ? "生成 3 mm 图片出血" : "安全补足 3 mm 出血"}</button>
+                          <small className="action-explanation">{bleedAction.reason}</small>
+                        </>}
                         {issue.code === "PAGE.BLEED_INSUFFICIENT" && !bleedAction?.executable && <div className="manual-guidance"><b>需要回设计软件处理</b><span>将贴边背景或图片向裁切线外延展至少 3 mm；系统不会生成原设计中不存在的画面。</span></div>}
-                        {issue.code === "IMAGE.LOW_EFFECTIVE_DPI" && <label className="asset-upload"><input type="file" accept="image/png,image/jpeg,image/tiff,image/webp,.png,.jpg,.jpeg,.tif,.tiff,.webp" disabled={busy} onChange={(event) => replaceImage(issue, event.target.files?.[0] ?? null)} /><span>{isWorking ? "正在替换并复检…" : "上传高分辨率原图"}</span><small>保持当前位置和尺寸，仅替换图片对象 · 当前 {String(evidence.dpi ?? "-")} PPI</small></label>}
+                        {issue.code === "IMAGE.LOW_EFFECTIVE_DPI" && <>
+                          <ImageIssueEvidence job={job} issue={issue} />
+                          <label className="asset-upload"><input type="file" accept="image/png,image/jpeg,image/tiff,image/webp,.png,.jpg,.jpeg,.tif,.tiff,.webp" disabled={busy} onChange={(event) => replaceImage(issue, event.target.files?.[0] ?? null)} /><span>{isWorking ? "正在替换并复检…" : "为这张图上传高分辨率原图"}</span><small>保持当前页面位置和尺寸，仅替换上方所示图片对象。</small></label>
+                        </>}
                         {issue.code === "FONT.NOT_EMBEDDED" && <>
                           <label className="asset-upload"><input type="file" accept=".ttf,.otf,font/ttf,font/otf" disabled={busy} onChange={(event) => uploadFont(issue, event.target.files?.[0] ?? null)} /><span>{exactFontReady ? `原字体 ${fontName} 已就绪` : "上传原字体 TTF / OTF"}</span><small>系统会校验字体内部名称，名称不符不会使用。</small></label>
                           {!exactFontReady && <label className="inline-confirm"><input type="checkbox" checked={consented} onChange={(event) => setFontConsent((current) => ({ ...current, [key]: event.target.checked }))} /><span>没有原字体，允许候选导出使用替代字体；我会检查左侧字形与换行。</span></label>}
                           <button disabled={busy || (!exactFontReady && !consented) || !pdfxAction?.executable} onClick={() => applySingleFix("pdfx_candidate", key, !exactFontReady && consented)}>{isWorking ? "正在嵌入并复检…" : "嵌入字体并生成候选"}</button>
                         </>}
-                        {(issue.code === "COLOR.RGB_USED" || issue.code === "PDFX.NOT_DECLARED") && <>
+                        {(issue.code === "COLOR.RGB_USED" || (issue.code === "PDFX.NOT_DECLARED" && !hasRgbIssue)) && <>
                           {needsFontConfirmation && <label className="inline-confirm"><input type="checkbox" checked={consented} onChange={(event) => setFontConsent((current) => ({ ...current, [key]: event.target.checked }))} /><span>当前仍缺字体，允许候选导出使用替代字体，并检查左侧预览。</span></label>}
-                          <button disabled={busy || !pdfxAction?.executable || (needsFontConfirmation && !consented)} onClick={() => applySingleFix("pdfx_candidate", key, needsFontConfirmation && consented)}>{isWorking ? "正在转换并复检…" : "转换 CMYK / PDF/X-4"}</button>
+                          <button disabled={busy || !pdfxAction?.executable || (needsFontConfirmation && !consented)} onClick={() => applySingleFix("pdfx_candidate", key, needsFontConfirmation && consented)}>{isWorking ? "正在批量转换整份 PDF…" : issue.code === "COLOR.RGB_USED" ? "整份 PDF 批量转 CMYK" : "生成 PDF/X-4 候选"}</button>
+                          {issue.code === "COLOR.RGB_USED" && <small className="action-explanation">一次转换所有页面中的 RGB 图片、矢量和文字；完成复检后仍停留在修复页，不会自动跳到交付。</small>}
                         </>}
+                        {issue.code === "PDFX.NOT_DECLARED" && hasRgbIssue && <div className="batch-linked"><b>随整份 CMYK 转换一并处理</b><span>无需再次操作；批量转换会同时写入 PDF/X-4 候选声明和 OutputIntent。</span></div>}
                         <small className="rule-meta">规则 {issue.ruleVersion} · {Math.round(issue.confidence * 100)}% 置信度</small>
                       </div>}
                     </article>

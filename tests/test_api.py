@@ -144,7 +144,7 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(accepted.status_code, 200, accepted.text)
             self.assertNotIn("work_dir", accepted.text)
 
-    async def test_complex_border_rejects_bleed_but_allows_honest_trim_repair(self) -> None:
+    async def test_trim_then_complex_image_bleed_replaces_old_marks_and_preserves_trim(self) -> None:
         source = Path(self.temporary.name) / "complex-border.pdf"
         with pymupdf.open() as document:
             page = document.new_page(width=300, height=420)
@@ -165,16 +165,10 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         headers = {"X-Job-Token": created["accessToken"]}
         report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
         plan = {item["action"]: item for item in report["fixPlan"]}
-        self.assertFalse(plan["bleed_and_crop"]["executable"])
+        self.assertTrue(plan["bleed_and_crop"]["executable"])
+        self.assertEqual(plan["bleed_and_crop"]["safety"], "confirm")
+        self.assertEqual(plan["bleed_and_crop"]["method"], "edge_pixel_mirror_extend")
         self.assertTrue(plan["trim_and_crop_marks"]["executable"])
-
-        rejected = await self.client.post(
-            f"/v1/jobs/{created['jobId']}/fix",
-            headers=headers,
-            json={"actions": ["bleed_and_crop"], "acknowledgeFontSubstitution": False},
-        )
-        self.assertEqual(rejected.status_code, 409, rejected.text)
-        self.assertEqual(rejected.json()["error"]["code"], "FIX_ACTION_UNSAFE")
 
         repaired = await self.client.post(
             f"/v1/jobs/{created['jobId']}/fix",
@@ -193,6 +187,26 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved_codes, {"PAGE.TRIMBOX_MISSING"})
         after_plan = {item["action"]: item for item in repaired.json()["report"]["fixPlan"]}
         self.assertFalse(after_plan["trim_and_crop_marks"]["executable"])
+        self.assertTrue(after_plan["bleed_and_crop"]["executable"])
+        self.assertEqual(after_plan["bleed_and_crop"]["method"], "edge_pixel_mirror_extend")
+
+        bled = await self.client.post(
+            f"/v1/jobs/{created['jobId']}/fix",
+            headers=headers,
+            json={"actions": ["bleed_and_crop"], "acknowledgeFontSubstitution": False},
+        )
+        self.assertEqual(bled.status_code, 200, bled.text)
+        after_bleed_codes = {item["code"] for item in bled.json()["report"]["afterPreflight"]["issues"]}
+        self.assertNotIn("PAGE.BLEED_INSUFFICIENT", after_bleed_codes)
+        bleed_result = bled.json()["report"]["fix"]["results"][0]["pages"][0]
+        self.assertEqual(bleed_result["strategy"], "edge_pixel_mirror_extend")
+        self.assertTrue(bleed_result["cropMarksOutsideBleed"])
+
+        job_record = api_module.service.store.get_job(created["jobId"])
+        with pymupdf.open(job_record["output_path"]) as document:
+            final_page = document[0]
+            self.assertAlmostEqual(final_page.trimbox.width, 300, places=2)
+            self.assertAlmostEqual(final_page.trimbox.height, 420, places=2)
 
     async def test_low_resolution_image_can_be_replaced_in_place(self) -> None:
         created = await self._upload()
@@ -200,6 +214,17 @@ class MvpApiTest(unittest.IsolatedAsyncioTestCase):
         report = (await self.client.get(f"/v1/jobs/{created['jobId']}/report", headers=headers)).json()
         issue = next(item for item in report["preflight"]["issues"] if item["code"] == "IMAGE.LOW_EFFECTIVE_DPI")
         xref = issue["evidence"]["xref"]
+        self.assertEqual(issue["evidence"]["pixelWidth"], 600)
+        self.assertAlmostEqual(issue["evidence"]["placedWidthMm"], 180.0, places=1)
+        thumbnail = await self.client.get(
+            f"/v1/jobs/{created['jobId']}/assets/image-thumbnail?xref={xref}",
+            headers=headers,
+        )
+        self.assertEqual(thumbnail.status_code, 200, thumbnail.text)
+        self.assertEqual(thumbnail.headers["content-type"], "image/png")
+        self.assertTrue(thumbnail.content.startswith(b"\x89PNG\r\n\x1a\n"))
+        with Image.open(io.BytesIO(thumbnail.content)) as rendered_thumbnail:
+            self.assertLessEqual(max(rendered_thumbnail.size), 240)
         source_preview = await self.client.get(
             f"/v1/jobs/{created['jobId']}/preview?stage=source&page=1",
             headers=headers,
